@@ -28,6 +28,7 @@ variable change away (see [Moving to a new Proxmox release](#moving-to-a-new-pro
 - [Four traps this image works around](#four-traps-this-image-works-around)
 - [Moving to a new Proxmox release](#moving-to-a-new-proxmox-release)
 - [Build performance](#build-performance)
+- [arm64](#arm64)
 - [Release automation](#release-automation)
 - [Repository layout](#repository-layout)
 - [Troubleshooting](#troubleshooting)
@@ -262,7 +263,7 @@ All of these are `make` variables — `sudo make image DISK_SIZE=24G`, and so on
 | Variable | Default | Meaning |
 |---|---|---|
 | `IMAGE_NAME` | `proxmox-ve-9` | MAAS name (`custom/<name>`) and preseed filename |
-| `ARCH` / `SUBARCH` | `amd64` / `generic` | Target architecture. *Only amd64 was tested.* |
+| `ARCH` / `SUBARCH` | `amd64` / `generic` | Target architecture. `arm64` is wired up but **never built or deployed** — see [arm64](#arm64). |
 | `BOOT` | `uefi` | Boot mode baked into the image. *Only UEFI was tested.* |
 | `DISK_SIZE` | `16G` | Build VM disk. Upstream's 4G cannot fit Debian + Proxmox |
 | `BUILD_CPUS` / `BUILD_MEM` | `4` / `4096` | Build VM resources |
@@ -751,6 +752,42 @@ serve them; package signatures are still verified.
 
 ---
 
+## arm64
+
+Proxmox VE 9.2 added **official** arm64 support — same code base, same
+repositories, same release lifecycle as x86-64, with full support on NVIDIA Grace
+and Vera platforms and best-effort on other UEFI Armv8-A/Armv9-A hardware. The
+`pve-no-subscription` repository carries `proxmox-ve`, `pve-manager`,
+`proxmox-default-kernel` and `pve-qemu-kvm` for arm64.
+
+This repository is wired for it:
+
+```bash
+sudo WITH_ARM64=1 ./scripts/install-deps.sh    # adds qemu-system-arm, AAVMF
+sudo make image ARCH=arm64
+make preseed ARCH=arm64                        # -> ..._arm64_generic_proxmox-ve-9
+make upload ARCH=arm64
+```
+
+The firmware is selected from the **target** architecture (`AAVMF` for arm64,
+`OVMF` for amd64) and padded to 64 MiB as QEMU's arm64 `virt` machine requires;
+KVM is used only when the host and target architectures match.
+
+**This has never been run.** Nothing here has been built for arm64, let alone
+deployed, and it is listed under [Not verified](#not-verified) for that reason.
+Two things stand between the code and a usable image:
+
+- **Build speed.** On an x86_64 builder an arm64 build runs under TCG emulation
+  with no KVM. Expect it to be several times slower than the ~11 minutes an amd64
+  build takes; how much slower has not been measured. The I/O optimisations
+  (`eatmydata`, deferred initramfs) help less when the bottleneck is CPU.
+- **Somewhere to deploy it.** An arm64 image needs arm64 machines behind MAAS to
+  be worth anything, and none were available to test against.
+
+If you want arm64 seriously, put a native arm64 builder behind a second runner
+rather than emulating. That removes the speed problem entirely and lets the same
+pipeline build both architectures.
+
 ## Release automation
 
 [`.gitea/workflows/build-image.yml`](.gitea/workflows/build-image.yml) builds the image
@@ -931,7 +968,9 @@ plaintext `PVE_ROOT_PASSWORD`, `PVE_ENABLED=false`, `PVE_FQDN`, and every
 **Build variants**
 
 - `pve-enterprise` and `pve-test` repositories
-- arm64
+- **arm64** — the Makefile and scripts handle it (firmware selection, MAAS
+  architecture, the Debian-kernel check), but no arm64 image has been built and
+  none deployed. See [arm64](#arm64).
 - BIOS boot (`BOOT=bios`)
 - `DEBIAN_IMAGE_CHANNEL=daily`
 - `APT_PROXY` and `make deps-cache`. The ~700 MB figure quoted under

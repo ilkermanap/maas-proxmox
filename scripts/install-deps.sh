@@ -27,6 +27,14 @@ apt-get install -y --no-install-recommends \
     qemu-system-x86 qemu-utils ovmf cloud-image-utils \
     libnbd-bin nbdkit fuse2fs cpu-checker
 
+# arm64 hedefi icin ek paketler. Varsayilan olarak kurulmaz: x86_64 host'ta
+# arm64 derlemek TCG emulasyonu demektir (KVM yok) ve cok yavastir. Bu yol
+# hic denenmedi - README'deki "Verified status" bolumune bakin.
+if [ "${WITH_ARM64:-0}" = "1" ]; then
+    echo "==> arm64 hedefi icin ek paketler (WITH_ARM64=1)"
+    apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64
+fi
+
 echo "==> HashiCorp APT deposu ekleniyor (packer)"
 install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://apt.releases.hashicorp.com/gpg \

@@ -55,7 +55,11 @@ check "iSCSI initiator adi yok (dugumde uretilir)"  '! present "etc/iscsi/initia
 check "SSH host anahtarlari yok"                    '! grep -qE "^\./etc/ssh/ssh_host_.*_key$" "$TMP/list"'
 check "networking.service etkin DEGIL"              '! present "etc/systemd/system/multi-user.target.wants/networking.service"'
 check "interfaces.new yok (pvenetcommit ezmesin)"   '! present "etc/network/interfaces.new"'
-check "Debian cekirdegi yok"                        '! grep -qE "^\./boot/vmlinuz-.*[^e]-(cloud-)?amd64$" "$TMP/list"'
+# Mimariden bagimsiz: /boot altinda -pve ile bitmeyen hicbir cekirdek olmamali.
+# Debian'inki amd64'te *-amd64, arm64'te *-arm64 diye adlandirilir; Proxmox'unki
+# her zaman -pve ile biter. Hic cekirdek yoksa da gecer - PVE cekirdeginin
+# varligini asagidaki ayri kontrol dogruluyor.
+check "Debian cekirdegi yok"                        '! grep -E "^\./boot/vmlinuz-" "$TMP/list" | grep -qv -- "-pve$"'
 
 echo
 echo "==> Proxmox cekirdegi"

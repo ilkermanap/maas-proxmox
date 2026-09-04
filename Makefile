@@ -31,6 +31,9 @@ PVE_EXTRA_PACKAGES ?= ifupdown2 open-iscsi chrony postfix lvm2 thin-provisioning
                       ethtool bridge-utils ipmitool nvme-cli lsscsi sudo
 
 # ---------------------------------------------------------------- imaj ayarlari
+# amd64 | arm64.  arm64 is wired up but has never been built or deployed -
+# see "Verified status" in the README.  Building arm64 on an x86_64 host means
+# TCG emulation with no KVM, which is very slow; prefer a native arm64 builder.
 ARCH             ?= amd64
 SUBARCH          ?= generic
 BOOT             ?= uefi
@@ -85,8 +88,21 @@ MAAS_IMAGE_NAME  ?= custom/$(IMAGE_NAME)
 # MAAS snap kurulumu icin: /var/snap/maas/current/preseeds
 MAAS_PRESEED_DIR ?= /var/snap/maas/current/preseeds
 
-OVMF_DIR         ?= /usr/share/OVMF
-OVMF_SFX         ?= $(shell test -f $(OVMF_DIR)/OVMF_CODE.fd && echo "" || echo "_4M")
+# UEFI firmware, keyed on the TARGET architecture - an aarch64 guest needs
+# AAVMF whatever the build host is. (Upstream packer-maas keys this on the host
+# architecture instead, which only works when host and target match.)
+ifeq ($(strip $(ARCH)),arm64)
+FW_DIR           ?= /usr/share/AAVMF
+FW               ?= AAVMF
+else
+FW_DIR           ?= /usr/share/OVMF
+FW               ?= OVMF
+endif
+FW_SFX           ?= $(shell test -f $(FW_DIR)/$(FW)_CODE.fd && echo "" || echo "_4M")
+
+# KVM is only usable when the host and the guest share an architecture.
+# Otherwise QEMU falls back to TCG emulation, which is very slow.
+HOST_IS_ARM      := $(shell test "$$(uname -m)" = aarch64 && echo true || echo false)
 
 # ---------------------------------------------------------------- hedefler
 .PHONY: help deps deps-cache check-upstream print-var checkout overlay customize image verify preseed install-preseed upload clean distclean lint
@@ -165,8 +181,13 @@ ifeq ($(strip $(DEBIAN_IMAGE_CHANNEL)),stable)
 endif
 	sed -i -E 's|--best --force|-$(GZIP_LEVEL) --force|' $(PM)/scripts/fuse-tar-root
 	@grep -nE 'disk_size|^  cpus|^  memory' $(TPL)/debian-cloudimg.pkr.hcl
-	cp -v $(OVMF_DIR)/OVMF_CODE$(OVMF_SFX).fd $(TPL)/OVMF_CODE.fd
-	cp -v $(OVMF_DIR)/OVMF_VARS$(OVMF_SFX).fd $(TPL)/OVMF_VARS.fd
+	cp -v $(FW_DIR)/$(FW)_CODE$(FW_SFX).fd $(TPL)/OVMF_CODE.fd
+	cp -v $(FW_DIR)/$(FW)_VARS$(FW_SFX).fd $(TPL)/OVMF_VARS.fd
+ifeq ($(strip $(ARCH)),arm64)
+	# AAVMF images must be padded to 64 MiB for QEMU's arm64 "virt" machine.
+	truncate -s 64m $(TPL)/OVMF_CODE.fd
+	truncate -s 64m $(TPL)/OVMF_VARS.fd
+endif
 	rm -rf $(TPL)/output-cloudimg $(TPL)/seeds-cloudimg.iso
 	cd $(TPL) && PACKER_LOG=$(PACKER_LOG) packer init .
 	cd $(TPL) && PACKER_LOG=$(PACKER_LOG) packer build \
@@ -174,8 +195,8 @@ endif
 	    -var debian_version=$(DEBIAN_VERSION) \
 	    -var architecture=$(ARCH) \
 	    -var boot_mode=$(BOOT) \
-	    -var ovmf_suffix=$(OVMF_SFX) \
-	    -var host_is_arm=false \
+	    -var ovmf_suffix=$(FW_SFX) \
+	    -var host_is_arm=$(HOST_IS_ARM) \
 	    -var timeout=$(TIMEOUT) \
 	    -var customize_script=$(CUSTOMIZE) \
 	    -var filename=$(OUTPUT) \

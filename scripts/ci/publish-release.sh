@@ -20,6 +20,9 @@ REPO_URL="${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}"
 RUN="${GITHUB_RUN_NUMBER:-manual}"
 SHA="${GITHUB_SHA:-}"
 IMAGE=$(basename "$(ls "$DIST"/maas-image-*.tar.gz)")
+MAAS_ARCH=$(make -s print-var VAR=MAAS_ARCH)
+PVE_MAJOR=$(make -s print-var VAR=PVE_VERSION)
+IMAGE_NAME=$(make -s print-var VAR=IMAGE_NAME)
 
 BODY=$(cat <<BODYEOF
 Unofficial build of a MAAS-deployable Proxmox VE image.
@@ -32,8 +35,8 @@ Unofficial build of a MAAS-deployable Proxmox VE image.
 Upload to MAAS:
 
 \`\`\`bash
-maas \$PROFILE boot-resources create name='custom/proxmox-ve-9' \\
-    title='Proxmox VE 9' architecture='amd64/generic' \\
+maas \$PROFILE boot-resources create name='custom/${IMAGE_NAME}' \\
+    title='Proxmox VE ${PVE_MAJOR}' architecture='${MAAS_ARCH}' \\
     filetype='tgz' content@=${IMAGE}
 \`\`\`
 
