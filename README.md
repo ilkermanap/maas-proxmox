@@ -14,6 +14,7 @@ variable change away (see [Moving to a new Proxmox release](#moving-to-a-new-pro
 ## Table of contents
 
 - [What this does](#what-this-does)
+- [Prebuilt images](#prebuilt-images)
 - [Why Debian + the Proxmox repository, and not the Proxmox ISO](#why-debian--the-proxmox-repository-and-not-the-proxmox-iso)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
@@ -27,6 +28,7 @@ variable change away (see [Moving to a new Proxmox release](#moving-to-a-new-pro
 - [Four traps this image works around](#four-traps-this-image-works-around)
 - [Moving to a new Proxmox release](#moving-to-a-new-proxmox-release)
 - [Build performance](#build-performance)
+- [Release automation](#release-automation)
 - [Repository layout](#repository-layout)
 - [Troubleshooting](#troubleshooting)
 - [Verified status](#verified-status)
@@ -162,6 +164,33 @@ fails is retried on the next boot rather than leaving the node half-configured.
 - The curtin preseed from this repository installed on the MAAS region controller
 
 ---
+
+## Prebuilt images
+
+Images are built and published automatically:
+
+**→ [Download the latest image](https://gitea.mynodes.xyz/ilker/maas-proxmox/releases)**
+
+Each release carries the image, its SHA-256 checksum, the build's metadata
+(`image-info.txt`) and `SOURCES.md`, the corresponding-source offer required by the
+licences of the packages inside it. The builds are **unofficial** and not affiliated
+with Proxmox Server Solutions GmbH.
+
+```bash
+curl -LO https://gitea.mynodes.xyz/ilker/maas-proxmox/releases/download/<tag>/maas-image-pve-<version>-amd64.tar.gz
+curl -LO https://gitea.mynodes.xyz/ilker/maas-proxmox/releases/download/<tag>/maas-image-pve-<version>-amd64.tar.gz.sha256
+sha256sum -c maas-image-pve-<version>-amd64.tar.gz.sha256
+
+maas $PROFILE boot-resources create name='custom/proxmox-ve-9' \
+    title='Proxmox VE 9' architecture='amd64/generic' \
+    filetype='tgz' content@=maas-image-pve-<version>-amd64.tar.gz
+```
+
+You still need the curtin preseed on your MAAS region controller — see
+[Quick start](#quick-start) step 5. Downloading an image skips only steps 1-3.
+
+Prefer building it yourself if you would rather not trust someone else's binary;
+that is what the rest of this document is about.
 
 ## Quick start
 
@@ -722,6 +751,45 @@ serve them; package signatures are still verified.
 
 ---
 
+## Release automation
+
+[`.gitea/workflows/build-image.yml`](.gitea/workflows/build-image.yml) builds the image
+on a self-hosted runner and publishes it as a release.
+
+It runs **daily**, but rebuilds only when there is a reason to. Proxmox publishes
+roughly weekly — the trixie repository currently holds 56 `pve-manager` and 28
+`proxmox-kernel` versions — so an unconditional daily build would produce about
+45 GB a month of near-identical artifacts. A check that finds nothing costs about
+30 seconds.
+
+A rebuild is triggered when any of these holds:
+
+| Trigger | Why |
+|---|---|
+| `pve-manager` differs from the published image | The obvious one |
+| `proxmox-default-kernel` differs | Kernel security fixes do not bump `pve-manager`, and those matter most |
+| The newest release is older than `MAX_AGE_DAYS` (30) | Debian base security updates bump neither of the above; without a floor an image could sit unchanged for months |
+| Manual dispatch with `force` | Escape hatch |
+
+The comparison reads `image-info.txt` from the last release rather than guessing from
+tag names, so it reflects what is actually inside the published image.
+[`scripts/ci/decide-build.sh`](scripts/ci/decide-build.sh) can be run by hand to see the
+decision without triggering anything.
+
+Releases are tagged `pve-<version>-<date>` and pruned to the newest
+`KEEP_RELEASES` (3) — at ~1.5 GB each, unbounded retention fills the server.
+
+### Runner
+
+The runner is registered in **host mode**: steps run directly on the build machine as
+root, because the build needs `/dev/kvm`, `qemu-nbd`, FUSE and root privileges, all of
+which a container would have to be granted anyway. The consequence is worth stating
+plainly: anything able to dispatch a workflow in this repository gets root on the build
+machine. Do not attach this runner to a repository that accepts outside contributions.
+
+Checkout is a plain `git clone`, not `actions/checkout` — the latter is a JavaScript
+action and a host-mode runner has no Node.js runtime.
+
 ## Repository layout
 
 ```
@@ -730,6 +798,8 @@ scripts/install-deps.sh          build host dependencies
 scripts/customize-proxmox.sh.in  template for the script that runs inside the build VM
 scripts/deploy-cluster.sh        deploy a whole cluster through MAAS
 scripts/verify-image.sh          check a built image's contents
+scripts/ci/                      release pipeline helpers (decision, artifacts, publish, prune)
+.gitea/workflows/                Gitea Actions pipeline
 overlay/                         files baked into the image
   usr/local/sbin/pve-maas-init   first-boot state machine
   etc/pve-maas/pve-maas.conf     defaults, with every option documented

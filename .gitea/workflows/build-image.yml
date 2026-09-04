@@ -37,6 +37,9 @@ jobs:
       GITEA_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
       GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
       KEEP_RELEASES: '3'
+      # Rebuild even without a Proxmox version change once an image reaches this
+      # age, so Debian base security updates make it into the image.
+      MAX_AGE_DAYS: '30'
 
     steps:
       - name: Check out
@@ -58,29 +61,12 @@ jobs:
         run: |
           set -eu
           cd "$GITHUB_WORKSPACE"
-
-          UPSTREAM=$(./scripts/ci/upstream-version.sh)
-          TAG="pve-${UPSTREAM}"
-          echo "upstream pve-manager: ${UPSTREAM}"
-
-          PUBLISHED=$(curl -fsS -H "Authorization: token ${GITEA_TOKEN}" \
-              "${GITEA_API}/releases?limit=1" \
-            | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r[0]["tag_name"] if r else "")')
-          echo "latest release: ${PUBLISHED:-<none>}"
-
-          echo "tag=${TAG}"          >> "$GITHUB_OUTPUT"
-          echo "version=${UPSTREAM}" >> "$GITHUB_OUTPUT"
-
+          ./scripts/ci/decide-build.sh "$MAX_AGE_DAYS" > "$GITHUB_OUTPUT"
           if [ "${{ inputs.force }}" = "true" ]; then
             echo "forced by manual trigger"
-            echo "build=yes" >> "$GITHUB_OUTPUT"
-          elif [ "$PUBLISHED" = "$TAG" ]; then
-            echo "${TAG} is already published — nothing to do"
-            echo "build=no" >> "$GITHUB_OUTPUT"
-          else
-            echo "new version — building"
-            echo "build=yes" >> "$GITHUB_OUTPUT"
+            sed -i 's/^build=no$/build=yes/' "$GITHUB_OUTPUT"
           fi
+          cat "$GITHUB_OUTPUT"
 
       - name: Build
         if: steps.decide.outputs.build == 'yes'
