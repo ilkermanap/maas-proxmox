@@ -13,6 +13,11 @@ set -euo pipefail
 TAG="${1:?tag required}"
 VERSION="${2:?version required}"
 DIST="${3:?dist directory required}"
+
+# DIST cagiranin dizinine goreli olabilir; repo kokune gecmeden once mutlaklastir.
+DIST="$(cd "$DIST" && pwd)"
+# make degiskenlerini okuyabilmek icin depo koku gerekiyor.
+cd "$(dirname "$0")/../.."
 : "${GITEA_API:?GITEA_API required}"
 : "${GITEA_TOKEN:?GITEA_TOKEN required}"
 
