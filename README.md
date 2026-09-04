@@ -156,7 +156,8 @@ fails is retried on the next boot rather than leaving the node half-configured.
 
 **Deployment side:**
 
-- MAAS 3.2 or newer (custom image support); tested on 3.7.2
+- MAAS 3.2 or newer is the documented minimum for custom images. **Only 3.7.2 was
+  tested**, with the snap packaging; the deb packaging's preseed path is untested.
 - curtin 21.0 or newer
 - The curtin preseed from this repository installed on the MAAS region controller
 
@@ -219,7 +220,7 @@ All of these are `make` variables — `sudo make image DISK_SIZE=24G`, and so on
 | `PVE_VERSION` | `9` | Proxmox VE major version; used in the image name |
 | `DEBIAN_SERIES` | `trixie` | Debian codename that Proxmox release is built on |
 | `DEBIAN_VERSION` | `13` | Debian major version number |
-| `PVE_REPO` | `pve-no-subscription` | `pve-no-subscription`, `pve-enterprise` or `pve-test` |
+| `PVE_REPO` | `pve-no-subscription` | `pve-no-subscription`, `pve-enterprise` or `pve-test`. *Only `pve-no-subscription` was tested.* |
 | `PVE_REPO_URI` | `http://download.proxmox.com/debian/pve` | APT repository URI |
 | `PVE_KEYRING_URL` | derived from `DEBIAN_SERIES` | Proxmox archive keyring |
 | `PVE_EXTRA_PACKAGES` | `ifupdown2 open-iscsi chrony …` | Extra packages to bake in |
@@ -232,8 +233,8 @@ All of these are `make` variables — `sudo make image DISK_SIZE=24G`, and so on
 | Variable | Default | Meaning |
 |---|---|---|
 | `IMAGE_NAME` | `proxmox-ve-9` | MAAS name (`custom/<name>`) and preseed filename |
-| `ARCH` / `SUBARCH` | `amd64` / `generic` | Target architecture |
-| `BOOT` | `uefi` | Boot mode baked into the image |
+| `ARCH` / `SUBARCH` | `amd64` / `generic` | Target architecture. *Only amd64 was tested.* |
+| `BOOT` | `uefi` | Boot mode baked into the image. *Only UEFI was tested.* |
 | `DISK_SIZE` | `16G` | Build VM disk. Upstream's 4G cannot fit Debian + Proxmox |
 | `BUILD_CPUS` / `BUILD_MEM` | `4` / `4096` | Build VM resources |
 | `TIMEOUT` | `3h` | Packer build timeout |
@@ -243,9 +244,9 @@ All of these are `make` variables — `sudo make image DISK_SIZE=24G`, and so on
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DEBIAN_IMAGE_CHANNEL` | `stable` | `stable` uses a fixed URL so Packer's cache works; `daily` is upstream's default and changes every day |
+| `DEBIAN_IMAGE_CHANNEL` | `stable` | `stable` uses a fixed URL so Packer's cache works; `daily` is upstream's default and changes every day. *Only `stable` was tested.* |
 | `GZIP_LEVEL` | `6` | Tarball compression. Upstream uses 9 |
-| `APT_PROXY` | *(empty)* | Local APT cache, e.g. `http://10.0.2.2:3142` — see `make deps-cache` |
+| `APT_PROXY` | *(empty)* | Local APT cache, e.g. `http://10.0.2.2:3142` — see `make deps-cache`. *Untested.* |
 
 ### MAAS
 
@@ -324,27 +325,27 @@ write_files:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `PVE_ENABLED` | `true` | Set to `false` to disable all first-boot automation |
-| `PVE_FQDN` | *(empty)* | Override the detected FQDN |
+| `PVE_ENABLED` | `true` | Set to `false` to disable all first-boot automation. *Untested.* |
+| `PVE_FQDN` | *(empty)* | Override the detected FQDN. *Untested — detection was used.* |
 
 ### Credentials
 
 | Option | Default | Meaning |
 |---|---|---|
 | `PVE_ROOT_PASSWORD_HASH` | *(empty)* | `root@pam` password hash — generate with `openssl passwd -6` |
-| `PVE_ROOT_PASSWORD` | *(empty)* | Plaintext alternative; prefer the hash |
+| `PVE_ROOT_PASSWORD` | *(empty)* | Plaintext alternative; prefer the hash. *Untested — only the hash was exercised.* |
 
 ### Networking
 
 | Option | Default | Meaning |
 |---|---|---|
-| `PVE_NET_MANAGE` | `true` | Set to `false` to configure `/etc/network/interfaces` yourself |
-| `PVE_NET_BRIDGE` | `vmbr0` | Bridge name |
-| `PVE_NET_UPLINK` | *(auto)* | Bridge port; defaults to the interface holding the default route |
-| `PVE_NET_MODE` | `auto` | `auto`, `static` or `dhcp` |
-| `PVE_NET_APPLY` | `reboot` | `reboot`, `reload` (`ifreload -a`) or `none` |
-| `PVE_NET_VLAN_AWARE` | `false` | Make the bridge VLAN-aware (`bridge-vids 2-4094`) |
-| `PVE_NET_EXTRA` | *(empty)* | Raw text appended to `/etc/network/interfaces` |
+| `PVE_NET_MANAGE` | `true` | Set to `false` to configure `/etc/network/interfaces` yourself. *`false` untested.* |
+| `PVE_NET_BRIDGE` | `vmbr0` | Bridge name. *Only the default was tested.* |
+| `PVE_NET_UPLINK` | *(auto)* | Bridge port; defaults to the interface holding the default route. *Only auto-detection was tested.* |
+| `PVE_NET_MODE` | `auto` | `auto`, `static` or `dhcp`. *Only `auto` resolving to static was tested; the DHCP path is untested.* |
+| `PVE_NET_APPLY` | `reboot` | `reboot`, `reload` (`ifreload -a`) or `none`. *Only `reboot` was tested.* |
+| `PVE_NET_VLAN_AWARE` | `false` | Make the bridge VLAN-aware (`bridge-vids 2-4094`). *Untested.* |
+| `PVE_NET_EXTRA` | *(empty)* | Raw text appended to `/etc/network/interfaces`. *Untested.* |
 
 ### Cluster
 
@@ -354,25 +355,25 @@ write_files:
 | `PVE_CLUSTER_NAME` | *(empty)* | Cluster name, for `create` |
 | `PVE_CLUSTER_PEER` | *(empty)* | Address of an existing member, for `join` |
 | `PVE_CLUSTER_PEER_PASSWORD` | *(empty)* | That node's `root@pam` password |
-| `PVE_CLUSTER_PEER_PASSWORD_FILE` | *(empty)* | Read the password from a file instead |
+| `PVE_CLUSTER_PEER_PASSWORD_FILE` | *(empty)* | Read the password from a file instead. *Untested.* |
 | `PVE_CLUSTER_FINGERPRINT` | *(empty)* | The peer's certificate SHA-256 fingerprint |
-| `PVE_CLUSTER_FINGERPRINT_DISCOVER` | `true` | Read the fingerprint from the peer if not supplied (trust on first use) |
-| `PVE_CLUSTER_LINK0` / `LINK1` | *(empty)* | This node's corosync link addresses |
-| `PVE_CLUSTER_NODEID` / `VOTES` | *(empty)* | Passed through to Proxmox |
+| `PVE_CLUSTER_FINGERPRINT_DISCOVER` | `true` | Read the fingerprint from the peer if not supplied (trust on first use). *Untested — the fingerprint was always supplied.* |
+| `PVE_CLUSTER_LINK0` / `LINK1` | *(empty)* | This node's corosync link addresses. *Untested.* |
+| `PVE_CLUSTER_NODEID` / `VOTES` | *(empty)* | Passed through to Proxmox. *Untested.* |
 | `PVE_CLUSTER_WAIT` | `900` | Seconds to wait for the peer's API to answer |
-| `PVE_CLUSTER_RETRIES` | `5` | Join attempts, 30 s apart |
+| `PVE_CLUSTER_RETRIES` | `5` | Join attempts, 30 s apart. *The retry path is untested — the first attempt succeeded.* |
 | `PVE_CLUSTER_WIPE_SECRETS` | `true` | Scrub passwords from `conf.d` after joining |
 
 ### Storage
 
 | Option | Default | Meaning |
 |---|---|---|
-| `PVE_THINPOOL` | `auto` | `auto` (the VG with the most free space), `off`, or a VG name |
-| `PVE_THINPOOL_NAME` | `data` | Thin pool logical volume name |
-| `PVE_THINPOOL_STORAGE` | `local-lvm` | Proxmox storage id |
+| `PVE_THINPOOL` | `auto` | `auto` (the VG with the most free space), `off`, or a VG name. *Only `auto` was tested.* |
+| `PVE_THINPOOL_NAME` | `data` | Thin pool logical volume name. *Only the default was tested.* |
+| `PVE_THINPOOL_STORAGE` | `local-lvm` | Proxmox storage id. *Only the default was tested.* |
 | `PVE_THINPOOL_MIN_GB` | `16` | Skip the stage below this much free space |
-| `PVE_THINPOOL_DISK` | *(empty)* | Build a new VG from this whole disk instead |
-| `PVE_THINPOOL_VG` | `pve` | VG name used with `PVE_THINPOOL_DISK` |
+| `PVE_THINPOOL_DISK` | *(empty)* | Build a new VG from this whole disk instead. *Untested.* |
+| `PVE_THINPOOL_VG` | `pve` | VG name used with `PVE_THINPOOL_DISK`. *Untested.* |
 
 Worked examples: [`maas/examples/`](maas/examples/).
 
@@ -632,7 +633,11 @@ next to the metadata of the image you have (`/etc/pve-maas/image-info`).
 ### Within the same Debian base (9.2 → 9.3 → …)
 
 Nothing to change. No package versions are pinned; every build takes the current
-`proxmox-ve`:
+`proxmox-ve`.
+
+*Partly verified:* the mechanism is — five builds were made and each installed
+whatever the repository offered at the time. An actual minor-version step (a rebuild
+that picks up a newer Proxmox than the previous image) has not happened yet.*
 
 ```bash
 sudo make image && make verify && make upload
@@ -652,8 +657,11 @@ debian/scripts/setup-boot.sh:  if [ ${DEBIAN_VERSION} == '13' ]
 ```
 
 An unknown version falls through to the `else` branch, which installs a cloud-init
-package from 2020 — the image breaks silently. A major jump therefore waits on upstream
-support. In order:
+package from 2020 — the image breaks silently.
+
+*This is read from the upstream source, not observed: no build against an unsupported
+Debian version was attempted.* A major jump therefore waits on upstream support.
+In order:
 
 1. Does `canonical/packer-maas` handle the new Debian? (look at the `DEBIAN_VERSION`
    conditions in `debian/scripts/`)
@@ -682,8 +690,11 @@ Makefile.
 
 ## Build performance
 
-A build takes roughly 11 minutes on a 4-vCPU builder, most of it installing packages
-inside the build VM. These optimisations are on by default:
+A build takes about 11 minutes on a 4-vCPU builder, most of it installing packages
+inside the build VM. Measured on the host described under
+[Verified status](#verified-status): 15 min 55 s before these optimisations,
+10 min 36 s after. The individual contributions were not measured separately.
+All of them are on by default:
 
 - **`eatmydata`** — drops dpkg's per-package `fsync` calls. Safe here: the build VM's
   disk is thrown away.
@@ -696,7 +707,9 @@ inside the build VM. These optimisations are on by default:
 - **`GZIP_LEVEL=6`** — upstream uses `--best` (9). With `pigz` this is noticeably faster
   for a few percent more size.
 
-For repeated builds, a local APT cache removes about 700 MB of downloads:
+For repeated builds, a local APT cache should remove roughly 700 MB of downloads.
+*This path is untested and the figure is an estimate from package sizes, not a
+measurement:*
 
 ```bash
 sudo make deps-cache                              # installs apt-cacher-ng
@@ -794,20 +807,87 @@ mode", with GRUB reporting `invalid magic number`.
 
 ## Verified status
 
-This repository was tested end to end against live hardware-backed infrastructure:
+Be sceptical of anything not listed under **Verified**. Individual options are also
+marked *Untested* in the tables above where that applies.
+
+### Test environment
 
 | | |
 |---|---|
+| Build host | Ubuntu 24.04.1, x86_64, 8 vCPU / 31 GB, nested KVM |
+| MAAS | 3.7.2 (snap), region + rack on Ubuntu 24.04 |
+| Nodes | 2 × (2 vCPU, 6 GB RAM, 32 GiB disk), UEFI, Secure Boot off, virtio |
+| Network | Single flat isolated subnet; MAAS acting as gateway and DHCP |
 | Image | proxmox-ve 9.2.0 / pve-manager 9.2.11 / kernel 7.0.14-15-pve |
-| MAAS | 3.7.2 (snap) on Ubuntu 24.04, region + rack |
-| Deployment | `custom/proxmox-ve-9`, amd64/generic, LVM layout with a 12 GiB root |
-| Result | Two-node cluster, `Quorate: Yes`, `local-lvm` thin pool on both nodes |
-| Automation | Bridge conversion, root password, node identity, cluster create and join — all without logging in |
+| Storage layout | MAAS `lvm`, 12 GiB root LV, ~19 GiB left free in the VG |
 
-Not yet exercised: `PVE_CLUSTER_LINK0` (a separate corosync network), the
-`pve-enterprise` repository, arm64, and `deploy-cluster.sh` beyond `--dry-run`.
+### Verified
 
----
+Each of these was observed working on the running system, not merely assumed:
+
+| Area | Evidence |
+|---|---|
+| Build | Completes on a KVM-capable Ubuntu 24.04 host; 10 min 36 s with the speed options on, 15 min 55 s without |
+| Image contents | `make verify` — 22 checks, all passing |
+| Preseed install | `make preseed` and `make install-preseed` run on the MAAS region controller |
+| Upload | Image accepted by MAAS as `custom/proxmox-ve-9`, one complete resource set, SHA-256 matching the built file |
+| Deployment | `custom/proxmox-ve-9`, amd64/generic, UEFI, LVM layout — reaches `Deployed` |
+| `curtin-hooks` — kernel | Deployment no longer fails in "Configuring OS"; no kernel installed over APT |
+| `curtin-hooks` — interface naming | `/etc/systemd/network/10-maas-enp6s18.link` written; the interface comes up as `enp6s18` and cloud-init attempts no rename |
+| Node identity reset | Both nodes report their MAAS hostname; `/etc/pve/nodes/` holds `maas-node8` and `maas-node9`, not the build hostname |
+| `hosts` stage | `/etc/hosts` maps the management IP to the FQDN; the Proxmox banner shows the correct address |
+| `identity` stage | iSCSI initiator names regenerated and **different on each node** (`…:01:bfeec443aec7` vs `…:01:4b22246737a`) |
+| `rootpw` stage | `PVE_ROOT_PASSWORD_HASH` lands in `/etc/shadow`; the web UI answers on 8006 |
+| `network` stage | `vmbr0` up with the management address, `bridge-ports` set to the real interface, node reachable afterwards |
+| `cluster` stage — create | `pvecm status`: cluster formed, `Quorate: Yes` |
+| `cluster` stage — join | Second node joined on the first attempt in 36 s; both nodes independently report `Nodes: 2`, `Quorate: Yes` |
+| `PVE_CLUSTER_WIPE_SECRETS` | Both password fields in `conf.d` scrubbed after joining |
+| `storage` stage | `data` thin pool created from free VG space, registered as `local-lvm`, active on both nodes |
+| Cluster-wide storage safety | The joining node detected the existing `local-lvm` and added itself to its node list instead of overwriting it |
+| Stage resumption | The network stage reboots the node; remaining stages continue on the next boot and completed stages are skipped |
+| `deploy-cluster.sh` | `--help` and `--dry-run` against the live MAAS; user-data rendered correctly for a three-node cluster |
+| `make check-upstream` | Repository side — reports current `proxmox-ve` / `pve-manager` / `proxmox-default-kernel` versions |
+
+### Not verified
+
+Not known to be broken — simply never exercised. Treat as untested code.
+
+**Options** — see the *Untested* markers in the tables above. In short: every
+`PVE_NET_*` value other than the tested defaults, `PVE_CLUSTER_LINK0`/`LINK1`,
+fingerprint discovery (TOFU), `PVE_CLUSTER_PEER_PASSWORD_FILE`, the join retry path,
+plaintext `PVE_ROOT_PASSWORD`, `PVE_ENABLED=false`, `PVE_FQDN`, and every
+`PVE_THINPOOL_*` value other than `auto` with the defaults.
+
+**Build variants**
+
+- `pve-enterprise` and `pve-test` repositories
+- arm64
+- BIOS boot (`BOOT=bios`)
+- `DEBIAN_IMAGE_CHANNEL=daily`
+- `APT_PROXY` and `make deps-cache`. The ~700 MB figure quoted under
+  [Build performance](#build-performance) is an estimate from download sizes, not a
+  measurement.
+- A non-default `IMAGE_NAME`
+
+**Make targets** — `make upload` (the image was uploaded with the equivalent `maas`
+command, not through the target), `make deps-cache`, `make clean`, `make distclean`, and
+the image side of `make check-upstream`.
+
+**Features added after the last build** — `/etc/pve-maas/image-info` and therefore the
+image side of `make check-upstream`. The code is written and syntax-checked; no built
+image contains the file yet.
+
+**`deploy-cluster.sh` beyond `--dry-run`.** The underlying mechanism (create, read
+fingerprint, join) is verified, but the script's own deploy path has never run.
+
+**Environments** — MAAS releases other than 3.7.2, a deb-packaged MAAS (only the snap
+preseed path was used), MAAS storage layouts other than `lvm`, bonded or VLAN-tagged
+networking, IPv6 (the network stage writes an `inet6` stanza when a global address
+exists; that branch never ran), and real bare metal — the nodes tested were virtual
+machines.
+
+**Scale** — two nodes. Concurrent joins by several nodes at once, and clusters larger
+than two, are untested.
 
 ## Licensing
 

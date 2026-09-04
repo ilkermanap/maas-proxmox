@@ -46,15 +46,19 @@ imaji (`dd.gz`) ise MAAS'in disk duzenini tamamen devre disi birakir.
 
 ## Dogrulanmis durum
 
-Bu depo canli bir ortamda ucdan uca test edildi:
+**Kanonik ve ayrintili liste [README.md](README.md#verified-status) icindedir** -
+neyin test edildigi ve neyin edilmedigi orada secenek secenek isaretlidir.
 
-| | |
-|---|---|
-| Imaj | proxmox-ve 9.2.0 / pve-manager 9.2.11 / kernel 7.0.14-15-pve |
-| MAAS | 3.7.2 (snap), Ubuntu 24.04 region+rack |
-| Deploy | `custom/proxmox-ve-9`, amd64/generic, LVM duzeni (kok 12GiB) |
-| Sonuc | 2 dugumlu kume, `Quorate: Yes`, her iki dugumde `local-lvm` thin havuzu |
-| Otomasyon | vmbr0 donusumu, root parolasi, dugum adi, kume olusturma + katilma - hepsi elle mudahalesiz |
+Ozet: iki dugumlu bir kume, MAAS 3.7.2 uzerinde, elle mudahale olmadan kuruldu
+(proxmox-ve 9.2.0 / pve-manager 9.2.11 / kernel 7.0.14-15-pve). vmbr0 donusumu,
+root parolasi, dugum kimligi, local-lvm thin havuzu, kume olusturma ve katilma
+calisir durumda goruldu.
+
+Test EDILMEYENLER de az degil: `PVE_CLUSTER_LINK0` (ayri corosync agi), parmak izi
+otomatik kesfi, `PVE_NET_APPLY=reload`, bond/VLAN topolojileri, IPv6, arm64, BIOS
+onyukleme, `pve-enterprise` deposu, `deploy-cluster.sh`'in gercek deploy yolu ve
+gercek bare-metal donanim (test dugumleri sanal makineydi). Tam liste Ingilizce
+dokumanda.
 
 ## Gereksinimler
 
