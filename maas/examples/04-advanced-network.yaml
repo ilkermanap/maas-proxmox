@@ -1,0 +1,49 @@
+#cloud-config
+# Karmasik ag: bond + VLAN. Otomatik vmbr0 donusumunu kapatip
+# /etc/network/interfaces dosyasini kendimiz yaziyoruz.
+
+write_files:
+  - path: /etc/pve-maas/conf.d/50-pve.conf
+    permissions: "0600"
+    owner: root:root
+    content: |
+      PVE_ROOT_PASSWORD_HASH='$6$DEGISTIRIN$REPLACE.WITH.YOUR.OWN.HASH'
+      PVE_NET_MANAGE=false
+      PVE_CLUSTER_MODE=none
+
+  - path: /etc/network/interfaces
+    permissions: "0644"
+    owner: root:root
+    content: |
+      auto lo
+      iface lo inet loopback
+
+      iface eno1 inet manual
+      iface eno2 inet manual
+
+      auto bond0
+      iface bond0 inet manual
+              bond-slaves eno1 eno2
+              bond-mode 802.3ad
+              bond-xmit-hash-policy layer3+4
+              bond-miimon 100
+
+      auto vmbr0
+      iface vmbr0 inet static
+              address 192.0.2.20/24
+              gateway 192.0.2.1
+              bridge-ports bond0
+              bridge-stp off
+              bridge-fd 0
+              bridge-vlan-aware yes
+              bridge-vids 2-4094
+
+      source /etc/network/interfaces.d/*
+
+  - path: /etc/cloud/cloud.cfg.d/99-pve-maas-disable-network.cfg
+    permissions: "0644"
+    content: |
+      network: {config: disabled}
+
+runcmd:
+  - [ systemctl, enable, networking.service ]

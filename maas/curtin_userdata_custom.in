@@ -1,0 +1,57 @@
+#cloud-config
+#
+# MAAS curtin preseed - Proxmox VE ozel imaji icin
+#
+# Dosya adi:  curtin_userdata_custom_@@ARCH@@_generic_@@IMAGE_NAME@@
+# Kopyalanacak yer (MAAS snap):  /var/snap/maas/current/preseeds/
+#             (MAAS deb paketi):  /etc/maas/preseeds/
+#
+# Bu ad yalnizca 'custom/@@IMAGE_NAME@@' adiyla, '@@ARCH@@/generic' mimarisiyle
+# yuklenen imaja uygulanir; diger ozel imajlariniz etkilenmez.
+
+# Cekirdek kurulumu imajdaki /curtin/curtin-hooks tarafindan devre disi
+# birakilir (Proxmox cekirdegi imajda hazir gelir). Asagidaki blok yalnizca
+# kanca herhangi bir nedenle calismazsa devreye giren yedek yoldur.
+#
+# DIKKAT: burada 'kernel: null' KULLANMAYIN. MAAS ile gelen curtin
+# surumlerinin bir kismi bunu desteklemiyor ve kurulum su hatayla basarisiz
+# oluyor:  install_kernel -> AttributeError: 'NoneType' object has no
+# attribute 'get'
+kernel:
+  package: proxmox-default-kernel
+  fallback-package: proxmox-default-kernel
+  mapping: {}
+
+apt:
+  preserve_sources_list: true
+
+debconf_selections:
+ maas: |
+  {{for line in str(curtin_preseed).splitlines()}}
+  {{line}}
+  {{endfor}}
+
+late_commands:
+  maas: [wget, '--no-proxy', '{{node_disable_pxe_url}}', '--post-data', '{{node_disable_pxe_data}}', '-O', '/dev/null']
+
+  # Hedef sistemi /mnt altina bagla
+  late_01: mount --bind $TARGET_MOUNT_POINT /mnt
+
+  # MAAS datasource tanimini hedef sisteme tasi
+  late_02: grep -A2 datasource /etc/cloud/cloud.cfg.d/91_kernel_cmdline_url.cfg | sed 's/curtin//' | tee /mnt/etc/cloud/cloud.cfg.d/91_maas_datasource.cfg
+
+  # Debian cloud-init sablonundaki Ubuntu referanslarini duzelt
+  late_03: sed -i 's@ubuntu.com/ubuntu@debian.org/debian@g;s@archive@deb@g;s@ubuntu@debian@g;s@Ubuntu@Debian@g;s@security.debian.org/debian@security.debian.org@g' /mnt/etc/cloud/cloud.cfg
+
+  # zz-update-grub kancasindaki 'set -e' tuzagini kaldir
+  late_04: sed -i '/^set -e/{n;N;d}' /mnt/etc/kernel/postinst.d/zz-update-grub
+
+  # packer-maas'in netplan.io kontrolunu atlatmak icin koydugu sarmalayicilari sil
+  late_05: rm -f /usr/local/bin/dpkg-query /usr/local/bin/netplan
+  late_06: rm -f /mnt/usr/local/bin/dpkg-query /mnt/usr/local/bin/netplan
+
+  # Guvenlik agi: ilk acilis servisi kesin etkin olsun
+  late_07: chroot /mnt systemctl enable pve-maas-init.service || true
+
+  # Onceki calistirmadan kalan durum dosyalari varsa temizle
+  late_08: rm -f /mnt/var/lib/pve-maas/*.done /mnt/var/lib/pve-maas/complete

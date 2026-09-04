@@ -1,0 +1,31 @@
+#cloud-config
+# Mevcut bir kumeye katilan dugum.
+
+write_files:
+  - path: /etc/pve-maas/conf.d/50-pve.conf
+    permissions: "0600"
+    owner: root:root
+    content: |
+      PVE_ROOT_PASSWORD_HASH='$6$DEGISTIRIN$REPLACE.WITH.YOUR.OWN.HASH'
+
+      PVE_CLUSTER_MODE=join
+
+      # Kumede zaten bulunan bir dugumun IP'si
+      PVE_CLUSTER_PEER=192.0.2.11
+
+      # O dugumun root@pam parolasi (duz metin olmak zorunda - API dogrulamasi icin)
+      PVE_CLUSTER_PEER_PASSWORD='degistirin'
+
+      # Onerilen: parmak izini onceden verin (TOFU riskini kaldirir)
+      #   openssl s_client -connect 192.0.2.11:8006 </dev/null 2>/dev/null | \
+      #     openssl x509 -noout -fingerprint -sha256 | cut -d= -f2
+      # PVE_CLUSTER_FINGERPRINT='AA:BB:CC:...'
+      PVE_CLUSTER_FINGERPRINT_DISCOVER=true
+
+      # PVE_CLUSTER_LINK0=198.51.100.12
+
+      # Katilimdan sonra bu dosyadaki parolalar silinir
+      PVE_CLUSTER_WIPE_SECRETS=true
+
+      PVE_NET_APPLY=reboot
+      PVE_THINPOOL=auto

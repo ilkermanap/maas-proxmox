@@ -1,0 +1,17 @@
+#cloud-config
+# Tek basina (kumesiz) Proxmox VE dugumu.
+
+write_files:
+  - path: /etc/pve-maas/conf.d/50-pve.conf
+    permissions: "0600"
+    owner: root:root
+    content: |
+      PVE_ROOT_PASSWORD_HASH='$6$DEGISTIRIN$REPLACE.WITH.YOUR.OWN.HASH'
+      PVE_CLUSTER_MODE=none
+
+      # VLAN farkindalikli kopru isteniyorsa:
+      # PVE_NET_VLAN_AWARE=true
+
+      # Ikinci diski VM depolamasi olarak kullan:
+      # PVE_THINPOOL_DISK=/dev/sdb
+      # PVE_THINPOOL_VG=pve

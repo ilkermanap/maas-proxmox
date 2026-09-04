@@ -1,0 +1,6 @@
+/build/
+*.tar.gz
+*.dd.gz
+OVMF_CODE.fd
+OVMF_VARS.fd
+.secrets/

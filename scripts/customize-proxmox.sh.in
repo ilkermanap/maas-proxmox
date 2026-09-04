@@ -1,0 +1,285 @@
+#!/bin/bash
+#
+# customize-proxmox.sh - packer-maas'in debian sablonu icinde, build VM'inde calisir.
+#
+# Debian cloud image uzerine Proxmox VE kurar ve MAAS ile deploy edilebilecek
+# hale getirir. Bu dosya bir sablondur; Makefile @@...@@ yer tutucularini
+# doldurur ve sonuna base64 kodlu overlay arsivini ekler.
+#
+# NOT: Bu script packer tarafindan "expect_disconnect = true" ile calistirilir.
+#
+set -euo pipefail
+
+PVE_SUITE="@@PVE_SUITE@@"
+PVE_REPO="@@PVE_REPO@@"
+PVE_REPO_URI="@@PVE_REPO_URI@@"
+PVE_KEYRING_URL="@@PVE_KEYRING_URL@@"
+PVE_VERSION="@@PVE_VERSION@@"
+PVE_EXTRA_PACKAGES="@@PVE_EXTRA_PACKAGES@@"
+PACKER_MAAS_REF="@@PM_REF@@"
+
+export DEBIAN_FRONTEND=noninteractive
+APT="apt-get -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef"
+
+# eatmydata kurulduktan sonra $APT bunun uzerinden calisir; dpkg'nin her paket
+# icin yaptigi fsync'ler devre disi kalir. Imaj derlemede guvenli (VM diski
+# zaten atilabilir) ve paket kurulumunu belirgin sekilde hizlandirir.
+use_eatmydata() {
+    command -v eatmydata >/dev/null 2>&1 || return 0
+    APT="eatmydata ${APT}"
+    log "eatmydata etkin (dpkg fsync'leri devre disi)"
+}
+
+log() { echo "==> [pve-image] $*"; }
+
+# ---------------------------------------------------------------------------
+# 1. Gomulu overlay arsivini ac
+# ---------------------------------------------------------------------------
+log "Overlay dosyalari aciliyor"
+sed -n '/^__PVE_MAAS_OVERLAY__$/,$p' "$0" | tail -n +2 | base64 -d \
+    | tar xzf - -C / --no-same-owner --no-same-permissions
+chown -R root:root /usr/local/sbin/pve-maas-init /etc/pve-maas \
+                   /etc/systemd/system/pve-maas-init.service /curtin
+chmod 0755 /usr/local/sbin/pve-maas-init
+chmod 0755 /curtin /curtin/curtin-hooks
+chmod 0644 /etc/systemd/system/pve-maas-init.service
+chmod 0644 /etc/pve-maas/pve-maas.conf
+mkdir -p /etc/pve-maas/conf.d /var/lib/pve-maas
+
+# ---------------------------------------------------------------------------
+# 2. Build sirasinda hostname cozulebilir olmali (pve-cluster bunu ister)
+# ---------------------------------------------------------------------------
+BUILD_HOST="$(hostname -s)"
+BUILD_IP="$(ip -4 -o route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)"
+: "${BUILD_IP:=127.0.1.1}"
+log "Build hostname=${BUILD_HOST} ip=${BUILD_IP}"
+cp -a /etc/hosts /etc/hosts.pve-image-backup
+sed -i "/[[:space:]]${BUILD_HOST}\([[:space:]]\|$\)/d" /etc/hosts
+echo "${BUILD_IP} ${BUILD_HOST}.local ${BUILD_HOST}" >> /etc/hosts
+hostname -f || echo "UYARI: hostname -f cozulemedi" >&2
+
+# ---------------------------------------------------------------------------
+# 3. packer-maas'in kurdugu MAAS uyumlu cloud-init'i koru
+#
+# packer-maas, Debian'in cloud-init'i MAAS datasource'unu tam desteklemedigi
+# icin Ubuntu build'ini kuruyor. full-upgrade bunu geri almasin.
+# ---------------------------------------------------------------------------
+log "cloud-init paketi hold'a aliniyor"
+apt-mark hold cloud-init || true
+
+# apt-cacher-ng gibi bir HTTP onbellegi verilmisse Debian depolarini https'ten
+# http'ye cevir - aksi halde onbellek isabet etmez (CONNECT tunelini cache'leyemez).
+# Paket imzalari yine dogrulandigi icin guvenlik kaybi yok.
+if [ -n "${http_proxy:-}" ]; then
+    log "APT onbellegi kullaniliyor (${http_proxy}); Debian depolari http'ye cevriliyor"
+    sed -i 's|https://deb.debian.org|http://deb.debian.org|g; s|https://security.debian.org|http://security.debian.org|g' \
+        /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+fi
+
+log "eatmydata kuruluyor"
+$APT install eatmydata || true
+use_eatmydata
+
+# ---------------------------------------------------------------------------
+# 4. Proxmox APT deposu
+# ---------------------------------------------------------------------------
+log "Proxmox anahtarligi indiriliyor: ${PVE_KEYRING_URL}"
+curl -fsSL --retry 5 --retry-delay 3 "${PVE_KEYRING_URL}" \
+    -o /usr/share/keyrings/proxmox-archive-keyring.gpg
+chmod 0644 /usr/share/keyrings/proxmox-archive-keyring.gpg
+
+log "APT deposu ekleniyor: ${PVE_REPO_URI} ${PVE_SUITE} ${PVE_REPO}"
+cat > /etc/apt/sources.list.d/proxmox.sources <<EOF
+Types: deb
+URIs: ${PVE_REPO_URI}
+Suites: ${PVE_SUITE}
+Components: ${PVE_REPO}
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+EOF
+
+# Depo dogru mu, paketler gorunuyor mu?
+apt-get update
+apt-cache policy proxmox-ve | sed -n '1,6p'
+if ! apt-cache show proxmox-ve >/dev/null 2>&1; then
+    echo "HATA: proxmox-ve paketi bulunamadi. PVE_SUITE=${PVE_SUITE} PVE_REPO=${PVE_REPO} dogru mu?" >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Sistemi guncelle
+# ---------------------------------------------------------------------------
+log "full-upgrade"
+$APT full-upgrade
+
+# ---------------------------------------------------------------------------
+# 6. Etkilesimsiz kurulum icin debconf yanitlari
+# ---------------------------------------------------------------------------
+debconf-set-selections <<EOF
+postfix postfix/main_mailer_type select Local only
+postfix postfix/mailname string ${BUILD_HOST}.local
+samba-common samba-common/dhcp boolean false
+EOF
+
+# ---------------------------------------------------------------------------
+# 7. Proxmox cekirdegi + proxmox-ve
+#
+# Resmi rehber cekirdek kurulumundan sonra reboot onerir; bu reboot yalnizca
+# ZFS/DKMS gibi calisan cekirdege bagimli islemler icin gereklidir. proxmox-ve
+# paketleri kurulum sirasinda calisan cekirdege ihtiyac duymaz, bu yuzden imaj
+# derlerken reboot atlaniyor. Dugum zaten ilk acilista PVE cekirdegi ile acilir.
+# ---------------------------------------------------------------------------
+# initramfs, cekirdek/firmware/dkms tetikleyicileriyle kurulum sirasinda
+# defalarca yeniden uretiliyor. Kurulum boyunca devre disi birakip en sonda
+# bir kez uretmek birkac dakika kazandiriyor.
+log "update-initramfs gecici olarak devre disi"
+dpkg-divert --local --rename --add /usr/sbin/update-initramfs >/dev/null
+ln -sf /bin/true /usr/sbin/update-initramfs
+
+log "proxmox-default-kernel kuruluyor"
+$APT install proxmox-default-kernel
+
+log "proxmox-ve kuruluyor"
+$APT install proxmox-ve
+
+if [ -n "${PVE_EXTRA_PACKAGES}" ]; then
+    log "Ek paketler kuruluyor: ${PVE_EXTRA_PACKAGES}"
+    # shellcheck disable=SC2086
+    $APT install ${PVE_EXTRA_PACKAGES}
+fi
+
+log "Kurulan surumler:"
+dpkg-query -W -f='${Package} ${Version}\n' proxmox-ve pve-manager proxmox-default-kernel ifupdown2 || true
+
+# ---------------------------------------------------------------------------
+# 8. Debian cekirdegini ve os-prober'i kaldir
+# ---------------------------------------------------------------------------
+log "Debian cekirdegi ve os-prober kaldiriliyor"
+$APT purge os-prober || true
+# Yalnizca Debian'in kendi cekirdeklerini hedefle; Proxmox paketlerine dokunma.
+DEB_KERNELS="$(dpkg-query -W -f='${Package}\n' 'linux-image*' 2>/dev/null \
+    | grep -E '^linux-image' | grep -vE 'pve|proxmox' || true)"
+if [ -n "${DEB_KERNELS}" ]; then
+    log "Kaldirilacak: ${DEB_KERNELS}"
+    # shellcheck disable=SC2086
+    $APT purge ${DEB_KERNELS} || true
+fi
+$APT autoremove --purge || true
+
+log "update-initramfs geri aliniyor ve bir kez calistiriliyor"
+rm -f /usr/sbin/update-initramfs
+dpkg-divert --local --rename --remove /usr/sbin/update-initramfs >/dev/null
+update-initramfs -u -k all
+
+update-grub
+
+# ---------------------------------------------------------------------------
+# 9. Abonelik gerektiren depolari devre disi birak (varsa)
+# ---------------------------------------------------------------------------
+for f in /etc/apt/sources.list.d/*enterprise*; do
+    [ -e "$f" ] || continue
+    log "Devre disi birakiliyor: $f"
+    mv "$f" "$f.disabled"
+done
+
+# ---------------------------------------------------------------------------
+# 10. Dugum kimligini sifirla
+#
+# pmxcfs (/etc/pve) dugum adini config.db icinde saklar. Imaj build hostname'i
+# ile olusur; MAAS baska bir hostname ile deploy edecegi icin veritabanini
+# tamamen siliyoruz. pve-cluster ilk acilista guncel hostname ile yeni bir
+# config.db uretir ve ExecStartPost'taki 'pvecm updatecerts' sertifikalari
+# yeniden olusturur.
+# ---------------------------------------------------------------------------
+log "Proxmox dugum kimligi sifirlaniyor"
+systemctl stop pve-guests pve-ha-lrm pve-ha-crm pvescheduler pvestatd pveproxy \
+    pvedaemon pve-firewall pvefw-logger spiceproxy corosync pve-cluster 2>/dev/null || true
+sleep 2
+umount /etc/pve 2>/dev/null || true
+rm -f /var/lib/pve-cluster/config.db /var/lib/pve-cluster/config.db-wal \
+      /var/lib/pve-cluster/config.db-shm /var/lib/pve-cluster/.pmxcfs.lockfile
+rm -rf /etc/corosync/* /var/lib/corosync/*
+rm -rf /var/lib/rrdcached/db/*
+rm -f /etc/pve/* 2>/dev/null || true
+# iSCSI initiator adi dugume ozeldir; ilk acilista yeniden uretilir.
+rm -f /etc/iscsi/initiatorname.iscsi
+# Kume icin uretilen SSH bilgileri imaja sizmasin.
+rm -f /root/.ssh/known_hosts /etc/ssh/ssh_known_hosts
+find /root/.ssh -type l -delete 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 11. Ilk acilis servisini etkinlestir
+# ---------------------------------------------------------------------------
+log "pve-maas-init.service etkinlestiriliyor"
+systemctl daemon-reload
+systemctl enable pve-maas-init.service
+
+# ---------------------------------------------------------------------------
+# 12. Temizlik
+# ---------------------------------------------------------------------------
+# Kalici journald: dugum ilk acilista bir kez yeniden baslayabildigi icin
+# (PVE_NET_APPLY=reboot) ucucu journal ile pve-maas-init kayitlari kayboluyor.
+# ---------------------------------------------------------------------------
+# Ilk acilista agi MAAS'a birak
+#
+# ifupdown2 kurulumu /etc/network/interfaces dosyasina build VM'inin arayuz
+# adini yaziyor (or. "iface ens4 inet manual") ve networking.service etkin
+# geliyor. Deploy edilen dugumde MAAS agi netplan/systemd-networkd ile
+# yapilandirir; ayni anda ifupdown2 devreye girince gercek arayuzu kapatiyor
+# ve dugum daha pve-maas-init calismadan agini kaybediyor.
+#
+# Cozum: imajda temiz/bos bir interfaces dosyasi birak ve networking.service'i
+# devre disi birak. pve-maas-init ag asamasinda vmbr0'i yazip bu servisi
+# kendisi etkinlestirir.
+# ---------------------------------------------------------------------------
+log "networking.service devre disi birakiliyor (ilk acilista ag MAAS'ta)"
+cat > /etc/network/interfaces <<'EOF'
+# Bu dosya pve-maas-init tarafindan, dugum ilk acilista vmbr0 koprusune
+# gecirilirken yeniden yazilir. O ana kadar ag MAAS/cloud-init (netplan)
+# tarafindan yonetilir; bu yuzden burada yalnizca loopback tanimlidir.
+auto lo
+iface lo inet loopback
+
+source /etc/network/interfaces.d/*
+EOF
+rm -f /etc/network/interfaces.d/* 2>/dev/null || true
+# Proxmox, ag degisikliklerini once /etc/network/interfaces.new dosyasina
+# yaziyor; pvenetcommit.service acilista bunu interfaces uzerine TASIYOR.
+# Build sirasinda olusan bir .new dosyasi imajda kalirsa dugumun ilk
+# acilisinda temiz yapilandirmamizi ezer.
+rm -f /etc/network/interfaces.new
+systemctl disable networking.service 2>/dev/null || true
+
+# Imajin kunyesi - dagitilmis bir dugumde "bu hangi imajdan geldi?" sorusunu
+# cevaplar; 'make check-upstream' de bunu okur.
+log "Imaj kunyesi yaziliyor: /etc/pve-maas/image-info"
+{
+    echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "pve_version=@@PVE_VERSION@@"
+    echo "debian_suite=${PVE_SUITE}"
+    echo "pve_repo=${PVE_REPO}"
+    echo "packer_maas_ref=${PACKER_MAAS_REF}"
+    dpkg-query -W -f='${Package}=${Version}\n' proxmox-ve pve-manager proxmox-default-kernel 2>/dev/null
+    echo "kernel=$(ls -1 /boot/vmlinuz-*-pve 2>/dev/null | sed 's|.*/vmlinuz-||' | head -1)"
+} > /etc/pve-maas/image-info
+cat /etc/pve-maas/image-info
+
+log "Kalici journald etkinlestiriliyor"
+mkdir -p /var/log/journal
+systemd-tmpfiles --create --prefix /var/log/journal 2>/dev/null || true
+
+log "Temizlik"
+mv /etc/hosts.pve-image-backup /etc/hosts
+rm -f /etc/postfix/main.cf.proto 2>/dev/null || true
+[ -f /etc/postfix/main.cf ] && postconf -e "myhostname = localhost" >/dev/null 2>&1 || true
+$APT clean
+rm -rf /var/lib/apt/lists/*
+find /var/log/journal -mindepth 1 -delete 2>/dev/null || true
+rm -rf /var/log/*.gz /var/log/*.1
+: > /var/log/wtmp || true
+: > /var/log/btmp || true
+cloud-init clean --logs || true
+
+log "Imaj hazir: Proxmox VE ${PVE_VERSION} / Debian ${PVE_SUITE}"
+exit 0
+
+# Bu satirdan sonrasi Makefile tarafindan eklenen base64 overlay arsividir.

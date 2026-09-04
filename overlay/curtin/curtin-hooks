@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+#
+# curtin-hooks - MAAS/curtin kurulum kancasi (Proxmox VE imaji icin)
+#
+# Curtin, hedef sistemde /curtin/curtin-hooks varsa dahili curthooks yerine
+# bu script'i calistirir (curtin.util.run_hook_if_exists).
+#
+# Amac: curtin'in APT uzerinden cekirdek kurmaya calismasini engellemek.
+# Proxmox cekirdegi (proxmox-default-kernel) imajin icinde hazir gelir;
+# curtin'in onu yeniden kurmasi gereksizdir ve dugumun deploy sirasinda
+# download.proxmox.com'a erisebilmesini zorunlu kilar (izole aglarda calismaz).
+#
+# Not: Bunu preseed'de "kernel: null" ile yapmak mumkun degil - MAAS ile
+# gelen curtin surumlerinin bir kismi bu degeri desteklemiyor ve
+# install_kernel icinde AttributeError ile patliyor. Kancayi kullanmak
+# curtin surumunden bagimsiz olarak calisir.
+#
+import shutil
+import os
+
+from curtin.commands import curthooks
+from curtin.config import load_command_config
+from curtin.util import load_command_environment
+
+
+def disable_kernel_install():
+    """curtin'in cekirdek kurulum adimini etkisiz hale getir.
+
+    Fonksiyon adi curtin surumune gore degisiyor (install_kernel ->
+    curthook_install_kernel), ikisini de yakaliyoruz.
+    """
+    disabled = []
+    for name in ("install_kernel", "curthook_install_kernel"):
+        if hasattr(curthooks, name):
+            setattr(curthooks, name, lambda *args, **kwargs: None)
+            disabled.append(name)
+    print("curtin-hooks: cekirdek kurulumu devre disi: %s" % (disabled or "hicbiri bulunamadi"))
+
+
+def pin_interface_names(config, target):
+    """MAAS'in bildigi arayuz adlarini hedef sistemde MAC uzerinden sabitle.
+
+    MAAS commissioning'i Ubuntu ephemeral ortaminda yapiyor ve arayuzu orada
+    gordugu adla (or. enp6s18) kaydediyor. Deploy edilen Debian 13 / Proxmox
+    ise udev'in farkli isimlendirme semasi yuzunden ayni karti ens18 diye
+    adlandirabiliyor. Bu durumda cloud-init acilista arayuzu yeniden
+    adlandirmaya calisiyor, su hatayi aliyor:
+
+        Failed to rename devices: [busy] Error renaming
+        mac=... from ens18 to enp6s18
+
+    ...ve arayuzu KAPALI birakiyor; dugum agini tamamen kaybediyor.
+
+    Cozum: MAC -> ad eslemesini systemd .link dosyasi olarak yaziyoruz, boylece
+    udev karti en bastan MAAS'in bekledigi adla olusturuyor ve yeniden
+    adlandirmaya hic gerek kalmiyor.
+    """
+    net = config.get("network") or {}
+    pairs = []
+
+    # netplan / v2 bicimi
+    for name, cfg in (net.get("ethernets") or {}).items():
+        cfg = cfg or {}
+        mac = (cfg.get("match") or {}).get("macaddress")
+        if mac:
+            pairs.append((cfg.get("set-name") or name, mac))
+
+    # curtin v1 bicimi
+    for entry in net.get("config") or []:
+        if not isinstance(entry, dict) or entry.get("type") != "physical":
+            continue
+        if entry.get("name") and entry.get("mac_address"):
+            pairs.append((entry["name"], entry["mac_address"]))
+
+    if not pairs:
+        print("curtin-hooks: arayuz adi sabitlenmedi (ag yapilandirmasi bos)")
+        return
+
+    link_dir = os.path.join(target, "etc/systemd/network")
+    os.makedirs(link_dir, exist_ok=True)
+    for name, mac in pairs:
+        path = os.path.join(link_dir, "10-maas-%s.link" % name)
+        with open(path, "w") as fh:
+            fh.write(
+                "# MAAS tarafindan beklenen arayuz adi - pve-maas imaji\n"
+                "# curtin-hooks tarafindan olusturuldu.\n"
+                "[Match]\n"
+                "MACAddress=%s\n"
+                "\n"
+                "[Link]\n"
+                "Name=%s\n" % (mac.lower(), name)
+            )
+        print("curtin-hooks: arayuz adi sabitlendi %s -> %s" % (mac, name))
+
+
+def cleanup():
+    """Kancayi hedef sistemden kaldir - iz birakma."""
+    curtin_dir = os.path.dirname(os.path.abspath(__file__))
+    shutil.rmtree(curtin_dir, ignore_errors=True)
+
+
+def main():
+    state = load_command_environment()
+    config = load_command_config(None, state)
+    target = state["target"]
+
+    disable_kernel_install()
+    curthooks.builtin_curthooks(config, target, state)
+    pin_interface_names(config, target)
+    cleanup()
+
+
+if __name__ == "__main__":
+    main()

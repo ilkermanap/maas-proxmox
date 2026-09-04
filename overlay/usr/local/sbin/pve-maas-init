@@ -1,0 +1,636 @@
+#!/bin/bash
+#
+# pve-maas-init - MAAS ile deploy edilen Proxmox VE dugumunu ilk acilista yapilandirir.
+#
+# Asamalar (her biri /var/lib/pve-maas/<asama>.done ile bir kez calisir):
+#   hosts    - hostname/FQDN'i yonetim IP'sine bagla (pvecm bunu ister)
+#   identity - dugume ozel kimlikleri yeniden uret (iSCSI IQN vb.)
+#   rootpw   - root@pam parolasini ayarla (web arayuzu ve kume katilimi icin)
+#   network  - MAAS'in verdigi arayuzu vmbr0 koprusune donustur
+#   cluster  - kume olustur veya mevcut kumeye katil
+#   storage  - bos alanda LVM-thin havuzu olustur (local-lvm)
+#
+# Yapilandirma:  /etc/pve-maas/pve-maas.conf  ve  /etc/pve-maas/conf.d/*.conf
+# (conf.d icerigi MAAS deploy sirasinda cloud-init write_files ile yazilir)
+#
+set -uo pipefail
+
+CONF_DIR=/etc/pve-maas
+STATE_DIR=/var/lib/pve-maas
+LOG_TAG=pve-maas-init
+
+mkdir -p "$STATE_DIR" "$CONF_DIR/conf.d"
+
+log()  { echo "[$LOG_TAG] $*"; logger -t "$LOG_TAG" -- "$*" 2>/dev/null || true; }
+warn() { echo "[$LOG_TAG] UYARI: $*" >&2; logger -t "$LOG_TAG" -p user.warning -- "UYARI: $*" 2>/dev/null || true; }
+die()  { echo "[$LOG_TAG] HATA: $*" >&2; logger -t "$LOG_TAG" -p user.err -- "HATA: $*" 2>/dev/null || true; exit 1; }
+
+done_flag()  { echo "$STATE_DIR/$1.done"; }
+is_done()    { [ -e "$(done_flag "$1")" ]; }
+mark_done()  { date -Is > "$(done_flag "$1")"; }
+
+# ---------------------------------------------------------------------------
+# Yapilandirmayi yukle
+# ---------------------------------------------------------------------------
+load_config() {
+    # shellcheck disable=SC1091
+    [ -r "$CONF_DIR/pve-maas.conf" ] && . "$CONF_DIR/pve-maas.conf"
+    local f
+    for f in "$CONF_DIR"/conf.d/*.conf; do
+        [ -r "$f" ] || continue
+        log "yapilandirma yukleniyor: $f"
+        # shellcheck disable=SC1090
+        . "$f"
+    done
+
+    # Varsayilanlar
+    PVE_ENABLED="${PVE_ENABLED:-true}"
+    PVE_FQDN="${PVE_FQDN:-}"
+
+    PVE_NET_MANAGE="${PVE_NET_MANAGE:-true}"
+    PVE_NET_BRIDGE="${PVE_NET_BRIDGE:-vmbr0}"
+    PVE_NET_UPLINK="${PVE_NET_UPLINK:-}"
+    PVE_NET_MODE="${PVE_NET_MODE:-auto}"        # auto | static | dhcp
+    PVE_NET_APPLY="${PVE_NET_APPLY:-reboot}"    # reboot | reload | none
+    PVE_NET_VLAN_AWARE="${PVE_NET_VLAN_AWARE:-false}"
+    PVE_NET_EXTRA="${PVE_NET_EXTRA:-}"
+
+    PVE_ROOT_PASSWORD="${PVE_ROOT_PASSWORD:-}"
+    PVE_ROOT_PASSWORD_HASH="${PVE_ROOT_PASSWORD_HASH:-}"
+
+    PVE_CLUSTER_MODE="${PVE_CLUSTER_MODE:-none}"   # none | create | join
+    PVE_CLUSTER_NAME="${PVE_CLUSTER_NAME:-}"
+    PVE_CLUSTER_PEER="${PVE_CLUSTER_PEER:-}"
+    PVE_CLUSTER_PEER_PASSWORD="${PVE_CLUSTER_PEER_PASSWORD:-}"
+    PVE_CLUSTER_PEER_PASSWORD_FILE="${PVE_CLUSTER_PEER_PASSWORD_FILE:-}"
+    PVE_CLUSTER_FINGERPRINT="${PVE_CLUSTER_FINGERPRINT:-}"
+    PVE_CLUSTER_FINGERPRINT_DISCOVER="${PVE_CLUSTER_FINGERPRINT_DISCOVER:-true}"
+    PVE_CLUSTER_LINK0="${PVE_CLUSTER_LINK0:-}"
+    PVE_CLUSTER_LINK1="${PVE_CLUSTER_LINK1:-}"
+    PVE_CLUSTER_NODEID="${PVE_CLUSTER_NODEID:-}"
+    PVE_CLUSTER_VOTES="${PVE_CLUSTER_VOTES:-}"
+    PVE_CLUSTER_WAIT="${PVE_CLUSTER_WAIT:-900}"
+    PVE_CLUSTER_RETRIES="${PVE_CLUSTER_RETRIES:-5}"
+    PVE_CLUSTER_WIPE_SECRETS="${PVE_CLUSTER_WIPE_SECRETS:-true}"
+
+    PVE_THINPOOL="${PVE_THINPOOL:-auto}"        # auto | off | <vg-adi>
+    PVE_THINPOOL_NAME="${PVE_THINPOOL_NAME:-data}"
+    PVE_THINPOOL_STORAGE="${PVE_THINPOOL_STORAGE:-local-lvm}"
+    PVE_THINPOOL_MIN_GB="${PVE_THINPOOL_MIN_GB:-16}"
+    PVE_THINPOOL_DISK="${PVE_THINPOOL_DISK:-}"
+    PVE_THINPOOL_VG="${PVE_THINPOOL_VG:-pve}"
+}
+
+# ---------------------------------------------------------------------------
+# Yardimcilar
+# ---------------------------------------------------------------------------
+primary_iface() {
+    if [ -n "$PVE_NET_UPLINK" ]; then echo "$PVE_NET_UPLINK"; return; fi
+    ip -4 -o route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}'
+}
+
+primary_ip() {
+    ip -4 -o route get 1.1.1.1 2>/dev/null \
+        | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}'
+}
+
+node_fqdn() {
+    local host fqdn dom
+    host="$(hostname -s)"
+    if [ -n "$PVE_FQDN" ]; then echo "$PVE_FQDN"; return; fi
+    fqdn="$(hostname -f 2>/dev/null || true)"
+    if [ -n "$fqdn" ] && [ "$fqdn" != "$host" ]; then echo "$fqdn"; return; fi
+    dom="$(awk '/^(search|domain)[[:space:]]/{print $2; exit}' /etc/resolv.conf 2>/dev/null || true)"
+    if [ -n "$dom" ]; then echo "${host}.${dom}"; else echo "$host"; fi
+}
+
+wait_for_cloud_init() {
+    command -v cloud-init >/dev/null 2>&1 || return 0
+    log "cloud-init'in bitmesi bekleniyor"
+    # Unit'te After=cloud-final.service kullanamiyoruz (siralama dongusu),
+    # bu yuzden beklemeyi burada yapiyoruz. Hata donmesi normal olabilir.
+    timeout 900 cloud-init status --wait >/dev/null 2>&1
+    log "cloud-init durumu: $(cloud-init status 2>/dev/null | head -1)"
+    return 0
+}
+
+wait_for_network() {
+    local i ip
+    for ((i = 0; i < 120; i += 5)); do
+        ip="$(primary_ip)"
+        [ -n "$ip" ] && { log "yonetim IP'si: ${ip}"; return 0; }
+        sleep 5
+    done
+    return 1
+}
+
+wait_for_pmxcfs() {
+    local i
+    for i in $(seq 1 60); do
+        [ -e /etc/pve/local ] && return 0
+        sleep 2
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Asama: hosts
+# ---------------------------------------------------------------------------
+stage_hosts() {
+    is_done hosts && return 0
+    local host fqdn ip
+    host="$(hostname -s)"
+    fqdn="$(node_fqdn)"
+    ip="$(primary_ip)"
+    [ -n "$ip" ] || { warn "yonetim IP'si bulunamadi, /etc/hosts atlaniyor"; return 0; }
+
+    log "/etc/hosts guncelleniyor: ${ip} ${fqdn} ${host}"
+    cp -a /etc/hosts "$STATE_DIR/hosts.orig" 2>/dev/null || true
+
+    local keep
+    keep="$(grep -vE "^[[:space:]]*(127\.0\.0\.1|127\.0\.1\.1|::1|ff02::[12])[[:space:]]" /etc/hosts 2>/dev/null \
+            | grep -vE "[[:space:]]${host}([[:space:]]|\$)" || true)"
+
+    {
+        echo "127.0.0.1 localhost.localdomain localhost"
+        echo "${ip} ${fqdn} ${host}"
+        [ -n "$keep" ] && echo "$keep"
+        echo
+        echo "# IPv6"
+        echo "::1     localhost ip6-localhost ip6-loopback"
+        echo "ff02::1 ip6-allnodes"
+        echo "ff02::2 ip6-allrouters"
+    } > /etc/hosts
+
+    if command -v postconf >/dev/null 2>&1 && [ -f /etc/postfix/main.cf ]; then
+        postconf -e "myhostname = ${fqdn}" >/dev/null 2>&1 || true
+        systemctl try-restart postfix >/dev/null 2>&1 || true
+    fi
+
+    # cloud-init manage_etc_hosts=true ise her acilista /etc/hosts'u
+    # 127.0.1.1 satiriyla geri yazar ve duzeltmemizi bozar.
+    cat > /etc/cloud/cloud.cfg.d/99-pve-maas-hosts.cfg <<'EOF'
+# /etc/hosts artik pve-maas-init tarafindan yonetiliyor.
+manage_etc_hosts: false
+EOF
+
+    hostname -f >/dev/null 2>&1 || warn "hostname -f hala cozulmuyor"
+
+    # pmxcfs dugum kimligini ve sertifikalari dogru hostname/IP ile yenile.
+    if systemctl list-unit-files pve-cluster.service >/dev/null 2>&1; then
+        log "pve servisleri yeniden baslatiliyor (dogru hostname ile)"
+        systemctl restart pve-cluster >/dev/null 2>&1 || true
+        systemctl restart pvedaemon pveproxy pvestatd >/dev/null 2>&1 || true
+    fi
+
+    mark_done hosts
+}
+
+# ---------------------------------------------------------------------------
+# Asama: identity - dugume ozel kimlikler
+# ---------------------------------------------------------------------------
+stage_identity() {
+    is_done identity && return 0
+    if [ ! -s /etc/iscsi/initiatorname.iscsi ] && command -v iscsi-iname >/dev/null 2>&1; then
+        log "iSCSI initiator adi uretiliyor"
+        mkdir -p /etc/iscsi
+        echo "InitiatorName=$(iscsi-iname)" > /etc/iscsi/initiatorname.iscsi
+        chmod 0600 /etc/iscsi/initiatorname.iscsi
+        systemctl try-restart iscsid open-iscsi >/dev/null 2>&1 || true
+    fi
+    mark_done identity
+}
+
+# ---------------------------------------------------------------------------
+# Asama: rootpw
+# ---------------------------------------------------------------------------
+stage_rootpw() {
+    is_done rootpw && return 0
+    if [ -n "$PVE_ROOT_PASSWORD_HASH" ]; then
+        log "root parolasi (hash) ayarlaniyor"
+        usermod -p "$PVE_ROOT_PASSWORD_HASH" root
+    elif [ -n "$PVE_ROOT_PASSWORD" ]; then
+        log "root parolasi ayarlaniyor"
+        echo "root:${PVE_ROOT_PASSWORD}" | chpasswd
+    else
+        warn "PVE_ROOT_PASSWORD tanimli degil; root@pam ile web arayuzune girilemez"
+        warn "ve bu dugum baska bir dugumun kumeye katilmasi icin hedef olamaz."
+        mark_done rootpw
+        return 0
+    fi
+    mark_done rootpw
+}
+
+# ---------------------------------------------------------------------------
+# Asama: network - MAAS arayuzunu vmbr0'a cevir
+# ---------------------------------------------------------------------------
+detect_net_mode() {
+    [ "$PVE_NET_MODE" != "auto" ] && { echo "$PVE_NET_MODE"; return; }
+    if grep -rqsE '^\s*(dhcp4|dhcp6)\s*:\s*(true|yes)' /etc/netplan/ 2>/dev/null; then
+        echo dhcp; return
+    fi
+    if grep -rqsE '^\s*iface\s+\S+\s+inet6?\s+dhcp' /etc/network/interfaces.d/ 2>/dev/null; then
+        echo dhcp; return
+    fi
+    echo static
+}
+
+neutralize_foreign_netconf() {
+    log "MAAS/cloud-init ag yapilandirmasi devre disi birakiliyor"
+    printf 'network: {config: disabled}\n' > /etc/cloud/cloud.cfg.d/99-pve-maas-disable-network.cfg
+
+    local d
+    d=/etc/network/interfaces.d/disabled-by-pve-maas
+    mkdir -p "$d"
+    find /etc/network/interfaces.d -maxdepth 1 -type f -print0 2>/dev/null \
+        | xargs -0 -r -I{} mv {} "$d/"
+
+    if compgen -G "/etc/netplan/*.yaml" >/dev/null || compgen -G "/etc/netplan/*.yml" >/dev/null; then
+        mkdir -p /etc/netplan/disabled-by-pve-maas
+        mv /etc/netplan/*.y*ml /etc/netplan/disabled-by-pve-maas/ 2>/dev/null || true
+    fi
+
+    if systemctl is-enabled systemd-networkd >/dev/null 2>&1; then
+        systemctl disable --now systemd-networkd systemd-networkd.socket >/dev/null 2>&1 || true
+    fi
+
+    # Proxmox statik /etc/resolv.conf bekler.
+    if [ -L /etc/resolv.conf ]; then
+        local ns search
+        ns="$(resolvectl dns 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9a-fA-F:.]+$' | sort -u || true)"
+        [ -z "$ns" ] && ns="$(awk '/^nameserver/{print $2}' /etc/resolv.conf | sort -u || true)"
+        search="$(awk '/^(search|domain)[[:space:]]/{$1=""; print substr($0,2); exit}' /etc/resolv.conf || true)"
+        if [ -n "$ns" ]; then
+            rm -f /etc/resolv.conf
+            {
+                [ -n "$search" ] && echo "search ${search}"
+                echo "$ns" | while read -r s; do [ -n "$s" ] && echo "nameserver $s"; done
+            } > /etc/resolv.conf
+            systemctl disable --now systemd-resolved >/dev/null 2>&1 || true
+        else
+            warn "nameserver bulunamadi, /etc/resolv.conf oldugu gibi birakiliyor"
+        fi
+    fi
+
+    systemctl enable networking.service >/dev/null 2>&1 || true
+}
+
+stage_network() {
+    is_done network && return 0
+    [ "$PVE_NET_MANAGE" = "true" ] || { log "ag yonetimi kapali (PVE_NET_MANAGE=false)"; mark_done network; return 0; }
+
+    local br uplink
+    br="$PVE_NET_BRIDGE"
+    uplink="$(primary_iface)"
+
+    if ip link show "$br" >/dev/null 2>&1 && [ "$uplink" = "$br" ]; then
+        log "$br zaten mevcut ve varsayilan rotayi tasiyor, ag donusumu atlaniyor"
+        mark_done network
+        return 0
+    fi
+    [ -n "$uplink" ] || { warn "uplink arayuzu bulunamadi, ag donusumu atlaniyor"; mark_done network; return 0; }
+
+    local mode cidr gw cidr6 gw6
+    mode="$(detect_net_mode)"
+    cidr="$(ip -4 -o addr show dev "$uplink" scope global 2>/dev/null | awk '{print $4; exit}')"
+    gw="$(ip -4 -o route show default dev "$uplink" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via") {print $(i+1); exit}}')"
+    cidr6="$(ip -6 -o addr show dev "$uplink" scope global -deprecated 2>/dev/null | awk '{print $4; exit}')"
+    gw6="$(ip -6 -o route show default dev "$uplink" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via") {print $(i+1); exit}}')"
+
+    if [ "$mode" = "static" ] && [ -z "$cidr" ]; then
+        warn "$uplink uzerinde IPv4 adresi yok, DHCP'ye dusuluyor"
+        mode=dhcp
+    fi
+
+    log "ag donusumu: ${uplink} -> ${br} (mod=${mode} adres=${cidr:-dhcp} gw=${gw:-yok})"
+    cp -a /etc/network/interfaces "$STATE_DIR/interfaces.orig" 2>/dev/null || true
+    neutralize_foreign_netconf
+
+    {
+        echo "# /etc/network/interfaces - pve-maas-init tarafindan olusturuldu"
+        echo "# Kaynak yedegi: $STATE_DIR/interfaces.orig"
+        echo
+        echo "auto lo"
+        echo "iface lo inet loopback"
+        echo
+        echo "iface ${uplink} inet manual"
+        echo
+        echo "auto ${br}"
+        if [ "$mode" = "dhcp" ]; then
+            echo "iface ${br} inet dhcp"
+        else
+            echo "iface ${br} inet static"
+            echo "        address ${cidr}"
+            [ -n "$gw" ] && echo "        gateway ${gw}"
+        fi
+        echo "        bridge-ports ${uplink}"
+        echo "        bridge-stp off"
+        echo "        bridge-fd 0"
+        [ "$PVE_NET_VLAN_AWARE" = "true" ] && {
+            echo "        bridge-vlan-aware yes"
+            echo "        bridge-vids 2-4094"
+        }
+        if [ -n "$cidr6" ]; then
+            echo
+            echo "iface ${br} inet6 static"
+            echo "        address ${cidr6}"
+            [ -n "$gw6" ] && echo "        gateway ${gw6}"
+        fi
+        if [ -n "$PVE_NET_EXTRA" ]; then
+            echo
+            echo "# PVE_NET_EXTRA"
+            printf '%s\n' "$PVE_NET_EXTRA"
+        fi
+        echo
+        echo "source /etc/network/interfaces.d/*"
+    } > /etc/network/interfaces
+
+    # Proxmox'un pvenetcommit.service'i acilista /etc/network/interfaces.new
+    # dosyasini interfaces uzerine tasiyor. Kalmis bir .new dosyasi yeni
+    # yazdigimiz yapilandirmayi yeniden baslatmada ezer.
+    rm -f /etc/network/interfaces.new
+
+    mark_done network
+
+    case "$PVE_NET_APPLY" in
+        reload)
+            log "ifreload -a ile uygulaniyor"
+            ip -4 addr flush dev "$uplink" 2>/dev/null || true
+            ip -6 addr flush dev "$uplink" scope global 2>/dev/null || true
+            if ! ifreload -a; then
+                warn "ifreload basarisiz, yedek rota ekleniyor"
+                [ -n "$gw" ] && ip route replace default via "$gw" dev "$br" 2>/dev/null || true
+            fi
+            ;;
+        reboot)
+            log "ag yapilandirmasi icin yeniden baslatiliyor; kalan asamalar sonraki acilista surecek"
+            # Bu servis hala calisirken 'systemctl reboot' cagirmak systemd islem
+            # kuyrugunda "transaction is destructive" hatasina yol acabilir; bu
+            # yuzden reboot'u ayri bir gecici unit uzerinden tetikliyoruz.
+            systemd-run --no-block --unit=pve-maas-reboot --on-active=5 \
+                /bin/systemctl reboot \
+                || shutdown -r +1 "pve-maas-init: ag yapilandirmasi uygulanacak"
+            exit 0
+            ;;
+        none)
+            log "PVE_NET_APPLY=none: yapilandirma yazildi, uygulanmadi"
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Asama: cluster
+# ---------------------------------------------------------------------------
+peer_fingerprint() {
+    local peer="$1"
+    openssl s_client -connect "${peer}:8006" -servername "${peer}" </dev/null 2>/dev/null \
+        | openssl x509 -noout -fingerprint -sha256 2>/dev/null \
+        | cut -d= -f2
+}
+
+wait_for_peer() {
+    local peer="$1" timeout="$2" i
+    log "kume dugumu bekleniyor: ${peer}:8006 (en fazla ${timeout}s)"
+    for ((i = 0; i < timeout; i += 5)); do
+        if timeout 4 bash -c "exec 3<>/dev/tcp/${peer}/8006" 2>/dev/null; then
+            log "${peer}:8006 erisilebilir"
+            return 0
+        fi
+        sleep 5
+    done
+    return 1
+}
+
+cluster_password() {
+    if [ -n "$PVE_CLUSTER_PEER_PASSWORD_FILE" ] && [ -r "$PVE_CLUSTER_PEER_PASSWORD_FILE" ]; then
+        head -1 "$PVE_CLUSTER_PEER_PASSWORD_FILE"
+    else
+        printf '%s' "$PVE_CLUSTER_PEER_PASSWORD"
+    fi
+}
+
+wipe_cluster_secrets() {
+    [ "$PVE_CLUSTER_WIPE_SECRETS" = "true" ] || return 0
+    local f
+    for f in "$CONF_DIR"/conf.d/*.conf; do
+        [ -r "$f" ] || continue
+        grep -q 'PVE_CLUSTER_PEER_PASSWORD\|PVE_ROOT_PASSWORD' "$f" || continue
+        log "kimlik bilgileri temizleniyor: $f"
+        sed -i -E "s/^([[:space:]]*(PVE_CLUSTER_PEER_PASSWORD|PVE_ROOT_PASSWORD)(_HASH)?=).*/\1'<silindi>'/" "$f"
+    done
+    if [ -n "$PVE_CLUSTER_PEER_PASSWORD_FILE" ] && [ -f "$PVE_CLUSTER_PEER_PASSWORD_FILE" ]; then
+        shred -u "$PVE_CLUSTER_PEER_PASSWORD_FILE" 2>/dev/null \
+            || rm -f "$PVE_CLUSTER_PEER_PASSWORD_FILE"
+    fi
+}
+
+wait_for_quorum() {
+    local i
+    for ((i = 0; i < 180; i += 5)); do
+        if pvecm status 2>/dev/null | grep -qE '^Quorate:[[:space:]]+Yes'; then
+            return 0
+        fi
+        sleep 5
+    done
+    return 1
+}
+
+stage_cluster() {
+    is_done cluster && return 0
+    [ "$PVE_CLUSTER_MODE" = "none" ] && { log "kume islemi yok (PVE_CLUSTER_MODE=none)"; mark_done cluster; return 0; }
+
+    wait_for_pmxcfs || { warn "/etc/pve baglanmadi, kume asamasi erteleniyor"; return 1; }
+
+    if [ -f /etc/pve/corosync.conf ]; then
+        log "dugum zaten bir kumenin parcasi, kume asamasi atlaniyor"
+        mark_done cluster
+        return 0
+    fi
+
+    local -a opts=()
+    [ -n "$PVE_CLUSTER_LINK0" ] && opts+=(--link0 "$PVE_CLUSTER_LINK0")
+    [ -n "$PVE_CLUSTER_LINK1" ] && opts+=(--link1 "$PVE_CLUSTER_LINK1")
+    [ -n "$PVE_CLUSTER_NODEID" ] && opts+=(--nodeid "$PVE_CLUSTER_NODEID")
+    [ -n "$PVE_CLUSTER_VOTES" ] && opts+=(--votes "$PVE_CLUSTER_VOTES")
+
+    case "$PVE_CLUSTER_MODE" in
+    create)
+        [ -n "$PVE_CLUSTER_NAME" ] || { warn "PVE_CLUSTER_NAME bos, kume olusturulamiyor"; return 1; }
+        log "kume olusturuluyor: ${PVE_CLUSTER_NAME}"
+        if pvecm create "$PVE_CLUSTER_NAME" "${opts[@]}"; then
+            wait_for_quorum && log "kume olusturuldu ve quorate"
+            mark_done cluster
+        else
+            warn "pvecm create basarisiz"
+            return 1
+        fi
+        ;;
+    join)
+        [ -n "$PVE_CLUSTER_PEER" ] || { warn "PVE_CLUSTER_PEER bos, katilim yapilamiyor"; return 1; }
+        local pw fp
+        pw="$(cluster_password)"
+        [ -n "$pw" ] || { warn "kume dugumunun root parolasi verilmedi (PVE_CLUSTER_PEER_PASSWORD)"; return 1; }
+
+        wait_for_peer "$PVE_CLUSTER_PEER" "$PVE_CLUSTER_WAIT" \
+            || { warn "kume dugumu ${PVE_CLUSTER_PEER} zaman asimina ugradi"; return 1; }
+
+        fp="$PVE_CLUSTER_FINGERPRINT"
+        if [ -z "$fp" ] && [ "$PVE_CLUSTER_FINGERPRINT_DISCOVER" = "true" ]; then
+            fp="$(peer_fingerprint "$PVE_CLUSTER_PEER")"
+            warn "parmak izi otomatik alindi (TOFU, dogrulanmadi): ${fp}"
+        fi
+        [ -n "$fp" ] || { warn "kume dugumunun sertifika parmak izi alinamadi"; return 1; }
+
+        local i rc=1
+        for ((i = 1; i <= PVE_CLUSTER_RETRIES; i++)); do
+            log "kumeye katiliniyor (deneme ${i}/${PVE_CLUSTER_RETRIES}): ${PVE_CLUSTER_PEER}"
+            # pvecm add etkilesimli parola sorar; API ucu ile etkilesimsiz calisiyoruz.
+            if pvesh create /cluster/config/join \
+                    --hostname "$PVE_CLUSTER_PEER" \
+                    --password "$pw" \
+                    --fingerprint "$fp" \
+                    "${opts[@]}"; then
+                rc=0
+                break
+            fi
+            warn "katilim basarisiz, 30s sonra tekrar denenecek"
+            sleep 30
+        done
+
+        if [ "$rc" -ne 0 ]; then
+            warn "kumeye katilim ${PVE_CLUSTER_RETRIES} denemede basarisiz"
+            return 1
+        fi
+
+        systemctl restart pve-cluster pvedaemon pveproxy pvestatd >/dev/null 2>&1 || true
+        if wait_for_quorum; then
+            log "kumeye katilim tamamlandi ve quorate"
+        else
+            warn "katilim yapildi ama quorum saglanamadi, kume durumunu kontrol edin"
+        fi
+        mark_done cluster
+        wipe_cluster_secrets
+        ;;
+    *)
+        warn "gecersiz PVE_CLUSTER_MODE=${PVE_CLUSTER_MODE}"
+        mark_done cluster
+        ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Asama: storage - LVM-thin havuzu
+# ---------------------------------------------------------------------------
+pick_vg() {
+    if [ "$PVE_THINPOOL" != "auto" ] && [ "$PVE_THINPOOL" != "off" ]; then
+        echo "$PVE_THINPOOL"; return
+    fi
+    vgs --noheadings --nosuffix --units b -o vg_name,vg_free 2>/dev/null \
+        | awk '{gsub(/^ +/,""); print $2, $1}' | sort -rn | head -1 | awk '{print $2}'
+}
+
+stage_storage() {
+    is_done storage && return 0
+    [ "$PVE_THINPOOL" = "off" ] && { log "thin havuz kapali"; mark_done storage; return 0; }
+
+    wait_for_pmxcfs || { warn "/etc/pve baglanmadi, storage asamasi erteleniyor"; return 1; }
+    command -v lvs >/dev/null 2>&1 || { warn "lvm2 yok"; mark_done storage; return 0; }
+
+    local vg="$PVE_THINPOOL_VG"
+
+    if [ -n "$PVE_THINPOOL_DISK" ]; then
+        if [ ! -b "$PVE_THINPOOL_DISK" ]; then
+            warn "PVE_THINPOOL_DISK=${PVE_THINPOOL_DISK} blok aygiti degil"
+            mark_done storage; return 0
+        fi
+        if ! pvs "$PVE_THINPOOL_DISK" >/dev/null 2>&1; then
+            log "PV/VG olusturuluyor: ${PVE_THINPOOL_DISK} -> ${vg}"
+            pvcreate -ff -y "$PVE_THINPOOL_DISK" || { warn "pvcreate basarisiz"; mark_done storage; return 0; }
+            vgcreate "$vg" "$PVE_THINPOOL_DISK" || { warn "vgcreate basarisiz"; mark_done storage; return 0; }
+        fi
+    else
+        vg="$(pick_vg)"
+    fi
+
+    [ -n "$vg" ] || { log "uygun VG bulunamadi, thin havuz atlaniyor"; mark_done storage; return 0; }
+
+    local pool="$PVE_THINPOOL_NAME"
+    if lvs "${vg}/${pool}" >/dev/null 2>&1; then
+        log "${vg}/${pool} zaten var"
+    else
+        local free_b free_g
+        free_b="$(vgs --noheadings --nosuffix --units b -o vg_free "$vg" 2>/dev/null | tr -d ' ')"
+        free_g=$(( ${free_b:-0} / 1024 / 1024 / 1024 ))
+        if [ "$free_g" -lt "$PVE_THINPOOL_MIN_GB" ]; then
+            log "${vg} icinde yalnizca ${free_g}GiB bos alan var (gereken ${PVE_THINPOOL_MIN_GB}GiB), thin havuz atlaniyor"
+            mark_done storage
+            return 0
+        fi
+        log "thin havuz olusturuluyor: ${vg}/${pool} (~${free_g}GiB)"
+        if ! lvcreate --type thin-pool -l 95%FREE -n "$pool" "$vg"; then
+            warn "lvcreate basarisiz"
+            mark_done storage
+            return 0
+        fi
+    fi
+
+    local storage="$PVE_THINPOOL_STORAGE" node
+    node="$(hostname -s)"
+    if pvesm status --storage "$storage" >/dev/null 2>&1; then
+        log "storage '${storage}' zaten tanimli"
+        local nodes
+        nodes="$(awk -v s="$storage" '$1=="lvmthin:" && $2==s {f=1; next} /^[a-z]+:/{f=0} f && $1=="nodes"{print $2}' /etc/pve/storage.cfg 2>/dev/null)"
+        if [ -n "$nodes" ] && ! echo ",$nodes," | grep -q ",${node},"; then
+            log "'${storage}' dugum listesine ${node} ekleniyor"
+            pvesm set "$storage" --nodes "${nodes},${node}" || warn "pvesm set basarisiz"
+        fi
+    else
+        log "storage tanimlaniyor: ${storage} (lvmthin ${vg}/${pool})"
+        local -a sopts=(--vgname "$vg" --thinpool "$pool" --content images,rootdir)
+        [ -f /etc/pve/corosync.conf ] && sopts+=(--nodes "$node")
+        pvesm add lvmthin "$storage" "${sopts[@]}" || warn "pvesm add basarisiz"
+    fi
+
+    mark_done storage
+}
+
+# ---------------------------------------------------------------------------
+main() {
+    load_config
+
+    if [ "$PVE_ENABLED" != "true" ]; then
+        log "PVE_ENABLED=false, hicbir sey yapilmiyor"
+        exit 0
+    fi
+
+    log "baslatiliyor (hostname=$(hostname -s))"
+
+    wait_for_cloud_init
+    load_config   # cloud-init conf.d dosyalarini yeni yazmis olabilir
+
+    if ! wait_for_network; then
+        warn "yonetim IP'si bulunamadi; sonraki acilista tekrar denenecek"
+        exit 1
+    fi
+
+    local failed=0
+    stage_hosts    || failed=1
+    stage_identity || failed=1
+    stage_rootpw   || failed=1
+    stage_network  || failed=1
+    stage_cluster  || failed=1
+    stage_storage  || failed=1
+
+    if [ "$failed" -eq 0 ] \
+        && is_done hosts && is_done identity && is_done rootpw \
+        && is_done network && is_done cluster && is_done storage; then
+        date -Is > "$STATE_DIR/complete"
+        log "tum asamalar tamamlandi"
+    else
+        warn "bazi asamalar tamamlanmadi; servis sonraki acilista tekrar denenecek"
+        warn "ayrintilar: journalctl -u pve-maas-init"
+        exit 1
+    fi
+}
+
+main "$@"

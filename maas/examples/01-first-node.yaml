@@ -1,0 +1,25 @@
+#cloud-config
+# Kumenin ILK dugumu: yeni bir kume olusturur.
+#
+# MAAS ile deploy:
+#   maas $PROFILE machine deploy $SYSTEM_ID \
+#     osystem=custom distro_series=proxmox-ve-9 \
+#     user_data="$(base64 -w0 01-first-node.yaml)"
+
+write_files:
+  - path: /etc/pve-maas/conf.d/50-pve.conf
+    permissions: "0600"
+    owner: root:root
+    content: |
+      # root@pam parolasi - web arayuzu ve diger dugumlerin katilimi icin sart.
+      # Hash uretmek icin:  openssl passwd -6
+      PVE_ROOT_PASSWORD_HASH='$6$DEGISTIRIN$REPLACE.WITH.YOUR.OWN.HASH'
+
+      PVE_CLUSTER_MODE=create
+      PVE_CLUSTER_NAME=pve-cluster-01
+
+      # Corosync icin ayri bir ag kullaniyorsaniz:
+      # PVE_CLUSTER_LINK0=198.51.100.11
+
+      PVE_NET_APPLY=reboot
+      PVE_THINPOOL=auto

@@ -1,0 +1,44 @@
+[Unit]
+Description=Proxmox VE post-deployment configuration for MAAS
+Documentation=file:/etc/pve-maas/pve-maas.conf
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/pve-maas/complete
+
+# DIKKAT - burada cloud-init servislerine "After=" YAZMAYIN.
+#
+# After=cloud-final.service + WantedBy=multi-user.target birlesimi bu imajda
+# siralama dongusu olusturuyor ve systemd dongoyu kirmak icin BU servisin
+# baslatma isini siliyor:
+#
+#   multi-user.target: Found ordering cycle on pve-maas-init.service/start
+#   multi-user.target: Found dependency on cloud-final.service/start
+#   multi-user.target: Found dependency on multi-user.target/start
+#   Job pve-maas-init.service/start deleted to break ordering cycle
+#
+# Bunun yerine script kendi icinde "cloud-init status --wait" ile bekliyor;
+# boylece hem conf.d dosyalari yazilmis oluyor hem de MAAS deploy sinyalini
+# almis oluyor, systemd bagimlilik grafigine dokunmadan.
+
+[Service]
+# Type=simple (oneshot DEGIL) - bu onemli.
+#
+# Type=oneshot ile servis bitene kadar multi-user.target ulasilmis sayilmiyor.
+# cloud-final.service ise "After=multi-user.target" ile siralanmis. Script
+# icinde cloud-init'i bekledigimiz icin bu bir kilitlenme uretiyordu:
+#
+#   cloud-final.service    waiting      (multi-user.target bekliyor)
+#   pve-maas-init.service  running      (cloud-init bekliyor)
+#   multi-user.target      waiting      (pve-maas-init bekliyor)
+#
+# Type=simple ile servis hemen "basladi" sayilir, multi-user.target acilir,
+# cloud-final calisir ve beklememiz doner. Asama takibi zaten
+# /var/lib/pve-maas/*.done dosyalariyla yapiliyor.
+Type=simple
+ExecStart=/usr/local/sbin/pve-maas-init
+TimeoutStartSec=0
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
