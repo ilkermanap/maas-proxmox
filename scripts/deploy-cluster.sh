@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # deploy-cluster.sh - MAAS uzerinden komple bir Proxmox VE kumesi kurar.
 #
@@ -31,7 +33,8 @@ DRY_RUN=false
 
 usage() {
     # Bastaki yorum blogunu, ilk kod satirina kadar bas.
-    awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1 && !/^#/{exit}' "$0"
+    awk 'NR>1 && /^#/{ if ($0 ~ /Copyright|SPDX/) next; sub(/^# ?/,""); print; next } \
+         NR>1 && !/^#/{exit}' "$0"
     cat <<EOF
 
 Secenekler:

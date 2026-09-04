@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # curtin-hooks - MAAS/curtin kurulum kancasi (Proxmox VE imaji icin)
 #

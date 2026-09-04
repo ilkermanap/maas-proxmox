@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # customize-proxmox.sh - packer-maas'in debian sablonu icinde, build VM'inde calisir.
 #

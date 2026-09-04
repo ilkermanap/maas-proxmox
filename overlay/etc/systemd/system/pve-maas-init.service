@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 [Unit]
 Description=Proxmox VE post-deployment configuration for MAAS
 Documentation=file:/etc/pve-maas/pve-maas.conf

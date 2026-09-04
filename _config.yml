@@ -1,0 +1,14 @@
+# GitHub Pages (Jekyll) configuration.
+#
+# index.md pulls in README.md, so the site and the repository README never drift
+# apart. Nothing is excluded: the rest of the tree is copied verbatim, which keeps
+# the README's relative links (LICENSE, scripts/, maas/examples/) working on the
+# published site as well as on GitHub.
+title: maas-proxmox
+description: >-
+  Build MAAS-deployable Proxmox VE images with first-boot automation:
+  vmbr0 bridge, local-lvm thin pool, and automatic cluster create/join.
+theme: jekyll-theme-cayman
+show_downloads: false
+exclude:
+  - build/

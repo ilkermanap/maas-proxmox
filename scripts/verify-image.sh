@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # verify-image.sh - Uretilen MAAS tgz imajinin beklenen icerige sahip oldugunu dogrular.
 #

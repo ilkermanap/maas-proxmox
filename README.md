@@ -30,7 +30,8 @@ variable change away (see [Moving to a new Proxmox release](#moving-to-a-new-pro
 - [Repository layout](#repository-layout)
 - [Troubleshooting](#troubleshooting)
 - [Verified status](#verified-status)
-- [Credits and licensing](#credits-and-licensing)
+- [Licensing](#licensing)
+- [References](#references)
 
 ---
 
@@ -808,17 +809,40 @@ Not yet exercised: `PVE_CLUSTER_LINK0` (a separate corosync network), the
 
 ---
 
-## Credits and licensing
+## Licensing
 
-Built on [`canonical/packer-maas`](https://github.com/canonical/packer-maas) (AGPL-3.0),
-which is cloned at build time rather than vendored here.
+**AGPL-3.0-or-later.** See [LICENSE](LICENSE).
 
-References:
+This is not a free choice. The project builds on
+[`canonical/packer-maas`](https://github.com/canonical/packer-maas), which Canonical
+distributes under the AGPLv3, and parts of this repository are derived from it:
+
+- `maas/curtin_userdata_custom.in` is adapted from upstream's
+  `debian/curtin_userdata_custom_amd64`. Several `late_commands` are copied verbatim —
+  the PXE-disable call, the `mount --bind` of the target, the cloud.cfg rewrite and the
+  `zz-update-grub` fix.
+- `overlay/curtin/curtin-hooks` follows upstream's `debian/scripts/curtin-hooks`:
+  the same imports, the same
+  `load_command_environment` → `load_command_config` → `builtin_curthooks` → `cleanup`
+  structure, and a near-identical `cleanup()`. The kernel-disabling and
+  interface-pinning functions are original.
+
+Because those are derivative works, the AGPLv3's copyleft carries over and the project
+cannot be released under a permissive licence, or under the plain GPL.
+
+The upstream template itself is **not vendored**. It is cloned at build time and pinned
+by `PM_REF`; the Makefile applies a small, explicit patch to it.
+
+In practice AGPLv3 asks very little of anyone using this. It is build tooling, not a
+network service: building images, uploading them to MAAS and running the resulting
+Proxmox nodes triggers no obligation. Section 13 — the clause AGPL is known for — only
+applies to someone who offers a *modified version of this software* to others over a
+network.
+
+## References
 
 - [MAAS — Build custom images](https://canonical.com/maas/docs/how-to-build-custom-images)
 - [Proxmox VE — Install on Debian 13](https://pve.proxmox.com/wiki/Install_Proxmox_VE_on_Debian_13_Trixie)
 - [Proxmox VE — Cluster Manager](https://pve.proxmox.com/wiki/Cluster_Manager)
 - [`pvecm(1)`](https://pve.proxmox.com/pve-docs/pvecm.1.html)
-
-No license has been chosen for this repository yet; add one before expecting others to
-reuse it.
+- [`canonical/packer-maas`](https://github.com/canonical/packer-maas)

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # pve-maas-init - MAAS ile deploy edilen Proxmox VE dugumunu ilk acilista yapilandirir.
 #

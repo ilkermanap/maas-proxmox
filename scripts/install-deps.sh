@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # install-deps.sh - Ubuntu 22.04+ build host'una packer-maas bagimliliklarini kurar.
 #

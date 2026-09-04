@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # maas-proxmox - Proxmox VE icin MAAS'a yuklenebilir Packer imaji
 #
 # Hizli baslangic (build host uzerinde, root olarak):

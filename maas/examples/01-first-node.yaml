@@ -1,4 +1,6 @@
 #cloud-config
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Kumenin ILK dugumu: yeni bir kume olusturur.
 #
 # MAAS ile deploy:
