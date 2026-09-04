@@ -44,6 +44,10 @@ jobs:
         # and has no Node.js runtime for JavaScript actions.
         run: |
           set -eux
+          # Step out of the workspace before removing it: the shell starts *in*
+          # $GITHUB_WORKSPACE, and deleting the current working directory makes
+          # every later command fail with "Unable to read current working directory".
+          cd /
           rm -rf "$GITHUB_WORKSPACE"
           git clone --depth 1 --branch "$GITHUB_REF_NAME" \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_WORKSPACE"
@@ -120,5 +124,7 @@ jobs:
         if: always()
         run: |
           # A 1.5 GB artifact per run would fill the builder otherwise.
+          # Runs even when an earlier step left the workspace missing, so cd out first.
+          cd /
           rm -rf "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/build" || true
           df -h / | tail -1
