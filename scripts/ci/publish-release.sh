@@ -1,0 +1,75 @@
+#!/bin/bash
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Creates a Gitea release and uploads the image, its checksum and the
+# corresponding-source offer.
+#
+#   publish-release.sh <tag> <version> <dist-dir>
+#
+# Requires GITEA_API and GITEA_TOKEN in the environment.
+set -euo pipefail
+
+TAG="${1:?tag required}"
+VERSION="${2:?version required}"
+DIST="${3:?dist directory required}"
+: "${GITEA_API:?GITEA_API required}"
+: "${GITEA_TOKEN:?GITEA_TOKEN required}"
+
+REPO_URL="${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}"
+RUN="${GITHUB_RUN_NUMBER:-manual}"
+SHA="${GITHUB_SHA:-}"
+IMAGE=$(basename "$(ls "$DIST"/maas-image-*.tar.gz)")
+
+BODY=$(cat <<BODYEOF
+Unofficial build of a MAAS-deployable Proxmox VE image.
+**Not affiliated with or endorsed by Proxmox Server Solutions GmbH.**
+
+- pve-manager: \`${VERSION}\`
+- Built: $(date -u +%Y-%m-%dT%H:%M:%SZ), run ${RUN}
+- Verify: \`sha256sum -c ${IMAGE}.sha256\`
+
+Upload to MAAS:
+
+\`\`\`bash
+maas \$PROFILE boot-resources create name='custom/proxmox-ve-9' \\
+    title='Proxmox VE 9' architecture='amd64/generic' \\
+    filetype='tgz' content@=${IMAGE}
+\`\`\`
+
+The curtin preseed from this repository must also be installed on the MAAS region
+controller, otherwise deployment fails — see the README.
+
+\`SOURCES.md\` in this release carries the corresponding-source offer required by
+the GPL/AGPL licences of the packages inside the image.
+BODYEOF
+)
+
+PAYLOAD=$(TAG="$TAG" VERSION="$VERSION" BODY="$BODY" SHA="$SHA" python3 -c '
+import json, os
+print(json.dumps({
+    "tag_name": os.environ["TAG"],
+    "name": "Proxmox VE %s image" % os.environ["VERSION"],
+    "body": os.environ["BODY"],
+    "draft": False,
+    "prerelease": False,
+    "target_commitish": os.environ["SHA"],
+}))')
+
+ID=$(curl -fsS -X POST \
+        -H "Authorization: token ${GITEA_TOKEN}" \
+        -H 'Content-Type: application/json' \
+        -d "$PAYLOAD" "${GITEA_API}/releases" \
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+echo "release id: ${ID}"
+
+for f in "$DIST"/*; do
+    [ -f "$f" ] || continue
+    echo "uploading $(basename "$f") ($(du -h "$f" | cut -f1))"
+    curl -fsS -X POST \
+        -H "Authorization: token ${GITEA_TOKEN}" \
+        -F "attachment=@${f}" \
+        "${GITEA_API}/releases/${ID}/assets?name=$(basename "$f")" >/dev/null
+done
+
+echo "published: ${REPO_URL}/releases/tag/${TAG}"

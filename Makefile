@@ -89,7 +89,7 @@ OVMF_DIR         ?= /usr/share/OVMF
 OVMF_SFX         ?= $(shell test -f $(OVMF_DIR)/OVMF_CODE.fd && echo "" || echo "_4M")
 
 # ---------------------------------------------------------------- hedefler
-.PHONY: help deps deps-cache check-upstream checkout overlay customize image verify preseed install-preseed upload clean distclean lint
+.PHONY: help deps deps-cache check-upstream print-var checkout overlay customize image verify preseed install-preseed upload clean distclean lint
 
 help:
 	@echo "maas-proxmox - Proxmox VE $(PVE_VERSION) MAAS imaji"
@@ -238,6 +238,11 @@ deps-cache:
 	@echo "Hazir. Derlemede kullanmak icin:"
 	@echo "  sudo make image APT_PROXY=http://10.0.2.2:3142"
 	@echo "(10.0.2.2 = packer user-mode aginda build host'un adresi)"
+
+# Tek bir degiskenin degerini bas - CI script'leri bunu kullanir.
+#   make -s print-var VAR=OUTPUT
+print-var:
+	@echo "$($(VAR))"
 
 lint:
 	@bash -n scripts/customize-proxmox.sh.in && echo "customize-proxmox.sh.in: OK"

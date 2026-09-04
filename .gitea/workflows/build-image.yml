@@ -1,0 +1,124 @@
+# Copyright (C) 2026 Ilker Manap
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Builds the MAAS image and publishes it as a Gitea release.
+#
+# Runs daily, but only *builds* when the Proxmox repository actually carries a
+# newer pve-manager than the last published release. Proxmox does not ship daily,
+# so an unconditional daily build would produce ~45 GB a month of near-identical
+# artifacts for nothing. Trigger manually with `force` to rebuild anyway.
+#
+# The runner is registered in host mode: steps run directly on the build machine
+# as root, because the build needs /dev/kvm, qemu-nbd, FUSE and root privileges.
+# Anything that can dispatch a workflow here therefore has root on that machine.
+
+name: build-image
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Build even if the version has not changed'
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: maas-builder
+    timeout-minutes: 120
+
+    env:
+      GITEA_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+      GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+      KEEP_RELEASES: '3'
+
+    steps:
+      - name: Check out
+        # A plain clone rather than actions/checkout: the runner is in host mode
+        # and has no Node.js runtime for JavaScript actions.
+        run: |
+          set -eux
+          rm -rf "$GITHUB_WORKSPACE"
+          git clone --depth 1 --branch "$GITHUB_REF_NAME" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE" && git log --oneline -1
+
+      - name: Decide whether to build
+        id: decide
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE"
+
+          UPSTREAM=$(./scripts/ci/upstream-version.sh)
+          TAG="pve-${UPSTREAM}"
+          echo "upstream pve-manager: ${UPSTREAM}"
+
+          PUBLISHED=$(curl -fsS -H "Authorization: token ${GITEA_TOKEN}" \
+              "${GITEA_API}/releases?limit=1" \
+            | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r[0]["tag_name"] if r else "")')
+          echo "latest release: ${PUBLISHED:-<none>}"
+
+          echo "tag=${TAG}"          >> "$GITHUB_OUTPUT"
+          echo "version=${UPSTREAM}" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "forced by manual trigger"
+            echo "build=yes" >> "$GITHUB_OUTPUT"
+          elif [ "$PUBLISHED" = "$TAG" ]; then
+            echo "${TAG} is already published — nothing to do"
+            echo "build=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "new version — building"
+            echo "build=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        if: steps.decide.outputs.build == 'yes'
+        run: |
+          set -eux
+          cd "$GITHUB_WORKSPACE"
+          make image
+
+      - name: Verify
+        if: steps.decide.outputs.build == 'yes'
+        run: |
+          set -eux
+          cd "$GITHUB_WORKSPACE"
+          make verify
+
+      - name: Assemble release artifacts
+        if: steps.decide.outputs.build == 'yes'
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE"
+          ./scripts/ci/assemble-artifacts.sh "${{ steps.decide.outputs.version }}"
+
+      - name: Publish
+        if: steps.decide.outputs.build == 'yes'
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE"
+          ./scripts/ci/publish-release.sh \
+            "${{ steps.decide.outputs.tag }}" \
+            "${{ steps.decide.outputs.version }}" \
+            dist
+
+      - name: Prune old releases
+        if: steps.decide.outputs.build == 'yes'
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE"
+          ./scripts/ci/prune-releases.sh "$KEEP_RELEASES"
+
+      - name: Clean up
+        if: always()
+        run: |
+          # A 1.5 GB artifact per run would fill the builder otherwise.
+          rm -rf "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/build" || true
+          df -h / | tail -1
