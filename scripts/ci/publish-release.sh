@@ -53,6 +53,15 @@ the GPL/AGPL licences of the packages inside the image.
 BODYEOF
 )
 
+# A forced rebuild on the same day, of the same upstream version, produces the
+# tag that is already published and the API answers 409. Disambiguate with the
+# run number rather than overwriting a release someone may already have used.
+if curl -fsS -o /dev/null -H "Authorization: token ${GITEA_TOKEN}" \
+        "${GITEA_API}/releases/tags/${TAG}" 2>/dev/null; then
+    TAG="${TAG}-r${RUN}"
+    echo "tag already exists; publishing as ${TAG} instead"
+fi
+
 PAYLOAD=$(TAG="$TAG" VERSION="$VERSION" BODY="$BODY" SHA="$SHA" python3 -c '
 import json, os
 print(json.dumps({
