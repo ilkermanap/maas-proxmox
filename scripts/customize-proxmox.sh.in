@@ -74,8 +74,11 @@ apt-mark hold cloud-init || true
 # Paket imzalari yine dogrulandigi icin guvenlik kaybi yok.
 if [ -n "${http_proxy:-}" ]; then
     log "APT onbellegi kullaniliyor (${http_proxy}); Debian depolari http'ye cevriliyor"
-    sed -i 's|https://deb.debian.org|http://deb.debian.org|g; s|https://security.debian.org|http://security.debian.org|g' \
-        /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+    # Debian 13 keeps the actual mirror URLs in /etc/apt/mirrors/*.list, reached
+    # through the "mirror+file:" method, so rewriting sources.list alone misses them.
+    sed -i 's|https://|http://|g' \
+        /etc/apt/sources.list /etc/apt/sources.list.d/*.sources \
+        /etc/apt/sources.list.d/*.list /etc/apt/mirrors/*.list 2>/dev/null || true
 fi
 
 log "eatmydata kuruluyor"

@@ -174,6 +174,17 @@ image: checkout $(CUSTOMIZE)
 	sed -i -E 's|^([[:space:]]*disk_size[[:space:]]*=[[:space:]]*).*|\1"$(DISK_SIZE)"|' $(TPL)/debian-cloudimg.pkr.hcl
 	sed -i -E 's|^([[:space:]]*cpus[[:space:]]*=[[:space:]]*).*|\1$(BUILD_CPUS)|' $(TPL)/debian-cloudimg.pkr.hcl
 	sed -i -E 's|^([[:space:]]*memory[[:space:]]*=[[:space:]]*).*|\1$(BUILD_MEM)|' $(TPL)/debian-cloudimg.pkr.hcl
+	@echo "==> Build VM apt ayari yamalaniyor (IPv4 zorlama + timeout)"
+	# Every apt fetch over roughly 15 MB inside the build VM used to stall for
+	# exactly 31 seconds regardless of its size, which is a connection timeout
+	# rather than a bandwidth limit: QEMU's user-mode network offers IPv6 that
+	# does not actually work, so apt's parallel connections black-hole on it and
+	# only fall back to IPv4 when the timeout expires. Forcing IPv4 took the
+	# 28.5 MB upstream fetch from 31s to 3s. bootcmd runs in cloud-init's
+	# init-local stage, before SSH is up, so this is in place for the upstream
+	# provisioners too, not just ours.
+	sed -i "/^bootcmd:/a\\  - echo 'Acquire::ForceIPv4 \"true\"; Acquire::http::Timeout \"20\"; Acquire::Retries \"3\";' > /etc/apt/apt.conf.d/99-build-speed" $(TPL)/user-data-cloudimg
+	@sed -n '/^bootcmd:/,+1p' $(TPL)/user-data-cloudimg
 ifeq ($(strip $(DEBIAN_IMAGE_CHANNEL)),stable)
 	@echo "==> Kararli Debian cloud image kullanilacak (packer onbellegi isabet eder)"
 	sed -i -E 's|/daily/latest/|/latest/|g; s|-daily\.qcow2|.qcow2|g' $(TPL)/debian-cloudimg.pkr.hcl

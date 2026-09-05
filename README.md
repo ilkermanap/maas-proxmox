@@ -276,7 +276,7 @@ All of these are `make` variables — `sudo make image DISK_SIZE=24G`, and so on
 |---|---|---|
 | `DEBIAN_IMAGE_CHANNEL` | `stable` | `stable` uses a fixed URL so Packer's cache works; `daily` is upstream's default and changes every day. *Only `stable` was tested.* |
 | `GZIP_LEVEL` | `6` | Tarball compression. Upstream uses 9 |
-| `APT_PROXY` | *(empty)* | Local APT cache, e.g. `http://10.0.2.2:3142` — see `make deps-cache`. *Untested.* |
+| `APT_PROXY` | *(empty)* | Local APT cache, e.g. `http://10.0.2.2:3142` — see `make deps-cache`. *Untested on this image; measured on maas-samba-ad.* |
 
 ### MAAS
 
@@ -737,9 +737,17 @@ All of them are on by default:
 - **`GZIP_LEVEL=6`** — upstream uses `--best` (9). With `pigz` this is noticeably faster
   for a few percent more size.
 
-For repeated builds, a local APT cache should remove roughly 700 MB of downloads.
-*This path is untested and the figure is an estimate from package sizes, not a
-measurement:*
+- **Forcing IPv4** — the Makefile patches the build VM's cloud-init seed to write
+  `Acquire::ForceIPv4 "true"` before SSH comes up. Without it, every apt download over
+  roughly 15 MB stalled for *exactly* 31 seconds regardless of its size: QEMU's
+  user-mode network offers IPv6 that does not actually work, so apt's parallel
+  connections black-holed on it and only fell back to IPv4 once the timeout expired.
+  Measured on the sibling [maas-samba-ad](https://github.com/ilkermanap/maas-samba-ad)
+  build, the same 28.5 MB fetch went from 31s (914 kB/s) to 3s (9.2 MB/s). The 31s
+  stall is visible in this project's build logs too, but the fix has not yet been
+  measured here.
+
+For repeated builds you can also put a local APT cache in front:
 
 ```bash
 sudo make deps-cache                              # installs apt-cacher-ng
@@ -748,7 +756,16 @@ sudo make image APT_PROXY=http://10.0.2.2:3142
 
 `10.0.2.2` is the build host as seen from Packer's user-mode network. When a proxy is
 configured, Debian repositories are rewritten from `https` to `http` so the cache can
-serve them; package signatures are still verified.
+serve them — a cache cannot see inside a `CONNECT` tunnel — and package signatures are
+still verified. Note that Debian 13 keeps the real mirror URLs in
+`/etc/apt/mirrors/*.list` behind the `mirror+file:` method, so rewriting `sources.list`
+alone is not enough.
+
+*Do not expect much from the cache on its own.* On the samba-ad build a fully warm cache
+turned a 26.2 MB fetch from 2s into 0s and a 17.9 MB fetch from 1s into 0s — about three
+seconds off a 4m40s build. Almost all of the time this project's builds spend on the
+network is the ~800 MB pulled from the Proxmox repository, which the cache *would* serve
+on a repeat build; that has not been measured.
 
 ---
 
@@ -973,9 +990,12 @@ plaintext `PVE_ROOT_PASSWORD`, `PVE_ENABLED=false`, `PVE_FQDN`, and every
   none deployed. See [arm64](#arm64).
 - BIOS boot (`BOOT=bios`)
 - `DEBIAN_IMAGE_CHANNEL=daily`
-- `APT_PROXY` and `make deps-cache`. The ~700 MB figure quoted under
-  [Build performance](#build-performance) is an estimate from download sizes, not a
-  measurement.
+- `APT_PROXY` and `make deps-cache` *for this image*. The cache was measured end to end
+  on the sibling maas-samba-ad build, where it saved about three seconds; this project
+  pulls far more from the Proxmox repository, and that case has not been measured.
+- The `Acquire::ForceIPv4` seed patch *for this image*. It was measured on maas-samba-ad
+  (31s to 3s on the same 28.5 MB fetch); the same 31s stall appears in this project's
+  logs, but no build has been run here since the patch was added.
 - A non-default `IMAGE_NAME`
 
 **Make targets** — `make upload` (the image was uploaded with the equivalent `maas`
