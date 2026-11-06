@@ -158,7 +158,13 @@ fi
 # grub-pc postinst'i build diskine grub-install yapmasin diye kurulum cihazi bos.
 if [ "$(dpkg --print-architecture)" = "amd64" ]; then
     log "grub-pc kuruluyor"
-    echo "grub-pc grub-pc/install_devices multiselect" | debconf-set-selections
+    # install_devices bos ama install_devices_empty=false ise postinst
+    # etkilesimsiz modda "You must correct your GRUB install devices" ile
+    # dpkg'yi hataya dusuruyor; bos listeyi bilerek onayliyoruz.
+    debconf-set-selections <<'EOF'
+grub-pc grub-pc/install_devices multiselect
+grub-pc grub-pc/install_devices_empty boolean true
+EOF
     $APT install grub-pc
     log "Kurulu GRUB paketleri:"
     dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' 'grub*' 2>/dev/null \
