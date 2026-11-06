@@ -152,6 +152,19 @@ if [ -n "${PVE_EXTRA_PACKAGES}" ]; then
     $APT install ${PVE_EXTRA_PACKAGES}
 fi
 
+# grub-pc: dugumde GRUB'i curtin degil imaj saglasin. Yalnizca amd64'te var
+# (arm64'te i386-pc hedefi yok). Debian'da grub-pc ile grub-efi-amd64 birbiriyle
+# catisir; kurulum grub-efi-amd64'u kaldirirsa asagidaki listede gorunur.
+# grub-pc postinst'i build diskine grub-install yapmasin diye kurulum cihazi bos.
+if [ "$(dpkg --print-architecture)" = "amd64" ]; then
+    log "grub-pc kuruluyor"
+    echo "grub-pc grub-pc/install_devices multiselect" | debconf-set-selections
+    $APT install grub-pc
+    log "Kurulu GRUB paketleri:"
+    dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' 'grub*' 2>/dev/null \
+        | grep '^ii' || true
+fi
+
 log "Kurulan surumler:"
 dpkg-query -W -f='${Package} ${Version}\n' proxmox-ve pve-manager proxmox-default-kernel ifupdown2 || true
 

@@ -46,6 +46,7 @@ check "pvesh ikilisi mevcut"                  'present "usr/bin/pvesh"'
 check "ifupdown2 mevcut"                      'present "usr/share/ifupdown2"'
 check "cloud-init mevcut"                     'present "usr/bin/cloud-init"'
 check "curtin-hooks mevcut"                   'present "curtin/curtin-hooks"'
+check "grub-pc kurulu (amd64)"                'present "var/lib/dpkg/info/grub-pc.list" || ! present "usr/lib/grub/x86_64-efi"'
 
 echo
 echo "==> Olmamasi gerekenler"
