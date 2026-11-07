@@ -17,9 +17,11 @@
 # install_kernel icinde AttributeError ile patliyor. Kancayi kullanmak
 # curtin surumunden bagimsiz olarak calisir.
 #
+import glob
 import shutil
 import os
 
+from curtin import util
 from curtin.commands import curthooks
 from curtin.config import load_command_config
 from curtin.util import load_command_environment
@@ -95,6 +97,40 @@ def pin_interface_names(config, target):
         print("curtin-hooks: arayuz adi sabitlendi %s -> %s" % (mac, name))
 
 
+GRUB_DEB_DIR = "var/lib/pve-maas/debs"
+
+
+def ensure_bios_grub(target):
+    """Legacy BIOS dugumde grub-pc'yi imajdaki .deb'den cevrimdisi kur.
+
+    Imaj grub-efi-amd64 ile gelir (UEFI). Debian'da grub-pc onunla catisir,
+    ikisi birden kurulu olamaz; bu yuzden grub-pc .deb'i imajda hazir durur.
+    curtin BIOS'ta 'dpkg-reconfigure grub-pc' calistirdigi icin paket kurulu
+    olmali, yoksa ag uzerinden kurmaya calisir (izole aglarda calismaz).
+    builtin_curthooks'tan ONCE cagrilmali.
+    """
+    if util.is_uefi_bootable():
+        print("curtin-hooks: UEFI dugum, grub-efi-amd64 kullaniliyor")
+        return
+    if os.path.exists(os.path.join(target, "var/lib/dpkg/info/grub-pc.list")):
+        print("curtin-hooks: legacy BIOS dugum, grub-pc zaten kurulu")
+        return
+    debs = sorted(glob.glob(os.path.join(target, GRUB_DEB_DIR, "grub-pc_*.deb")))
+    if not debs:
+        print("curtin-hooks: UYARI legacy BIOS dugum ama imajda grub-pc .deb'i yok; "
+              "curtin ag uzerinden kurmaya calisacak")
+        return
+    deb = "/" + os.path.relpath(debs[-1], target)
+    print("curtin-hooks: legacy BIOS dugum, grub-pc kuruluyor: %s" % deb)
+    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    with util.ChrootableTarget(target) as in_chroot:
+        # grub-pc, grub-efi-amd64'u Conflicts ile kaldirir; bagimliliklari
+        # (grub-pc-bin, grub2-common, ucf) imajda kurulu, indirme gerekmez.
+        in_chroot.subp(["apt-get", "-y", "--no-download",
+                        "-o", "Dpkg::Options::=--force-confold",
+                        "install", deb], env=env)
+
+
 def cleanup():
     """Kancayi hedef sistemden kaldir - iz birakma."""
     curtin_dir = os.path.dirname(os.path.abspath(__file__))
@@ -107,6 +143,7 @@ def main():
     target = state["target"]
 
     disable_kernel_install()
+    ensure_bios_grub(target)
     curthooks.builtin_curthooks(config, target, state)
     pin_interface_names(config, target)
     cleanup()

@@ -46,7 +46,10 @@ check "pvesh ikilisi mevcut"                  'present "usr/bin/pvesh"'
 check "ifupdown2 mevcut"                      'present "usr/share/ifupdown2"'
 check "cloud-init mevcut"                     'present "usr/bin/cloud-init"'
 check "curtin-hooks mevcut"                   'present "curtin/curtin-hooks"'
-check "grub-pc kurulu (amd64)"                'present "var/lib/dpkg/info/grub-pc.list" || ! present "usr/lib/grub/x86_64-efi"'
+# UEFI imaji grub-efi-amd64 ile gelir; legacy BIOS dugumler icin grub-pc .deb'i
+# imajda durur ve curtin-hooks onu deploy aninda kurar. arm64'te ikisi de yok.
+check "grub-efi-amd64 kurulu (amd64 UEFI)"    'present "var/lib/dpkg/info/grub-efi-amd64.list" || ! present "usr/lib/grub/x86_64-efi"'
+check "grub-pc .deb imajda (legacy BIOS icin)" 'grep -qE "^\./var/lib/pve-maas/debs/grub-pc_.*\.deb$" "$TMP/list" || ! present "usr/lib/grub/x86_64-efi"'
 
 echo
 echo "==> Olmamasi gerekenler"

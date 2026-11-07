@@ -152,24 +152,36 @@ if [ -n "${PVE_EXTRA_PACKAGES}" ]; then
     $APT install ${PVE_EXTRA_PACKAGES}
 fi
 
-# grub-pc: dugumde GRUB'i curtin degil imaj saglasin. Yalnizca amd64'te var
-# (arm64'te i386-pc hedefi yok). Debian'da grub-pc ile grub-efi-amd64 birbiriyle
-# catisir; kurulum grub-efi-amd64'u kaldirirsa asagidaki listede gorunur.
-# grub-pc postinst'i build diskine grub-install yapmasin diye kurulum cihazi bos.
-if [ "$(dpkg --print-architecture)" = "amd64" ]; then
-    log "grub-pc kuruluyor"
-    # install_devices bos ama install_devices_empty=false ise postinst
-    # etkilesimsiz modda "You must correct your GRUB install devices" ile
-    # dpkg'yi hataya dusuruyor; bos listeyi bilerek onayliyoruz.
+# Ayni imaj hem UEFI hem legacy BIOS dugumlere deploy edilebilsin.
+#
+# Debian'da grub-pc ile grub-efi-amd64 birbiriyle catisir, ikisi birden kurulu
+# olamaz. Iki platformun GRUB dosyalari (grub-pc-bin, grub-efi-amd64-bin,
+# imzali shim) zaten imajda; eksik olan yalnizca ince grub-pc paketi. Imaj
+# grub-efi-amd64 ile kalir, grub-pc .deb'i imajin icine konur ve curtin-hooks
+# dugum legacy BIOS ile acildiysa onu cevrimdisi kurar (grub-efi-amd64'u
+# kaldirarak). grub-pc yalnizca amd64'te var.
+GRUB_DEB_DIR=/var/lib/pve-maas/debs
+if [ "$(dpkg --print-architecture)" = "amd64" ] \
+   && dpkg-query -W -f='${Status}' grub-efi-amd64 2>/dev/null | grep -q 'ok installed'; then
+    log "grub-pc .deb'i legacy BIOS deploy icin imaja konuyor: ${GRUB_DEB_DIR}"
+    mkdir -p "${GRUB_DEB_DIR}"
+    # Kurulu grub-pc-bin ile ayni surum olmali, yoksa cevrimdisi kurulum
+    # bagimliliklari cozemez.
+    GRUB_VER="$(dpkg-query -W -f='${Version}' grub-pc-bin)"
+    (cd "${GRUB_DEB_DIR}" && apt-get download "grub-pc=${GRUB_VER}")
+    ls -l "${GRUB_DEB_DIR}"
+    # Deploy aninda postinst build/hedef diskine kendi kafasina gore
+    # grub-install yapmasin; diski curtin kendisi kurar. install_devices_empty
+    # olmadan etkilesimsiz postinst "You must correct your GRUB install
+    # devices" ile dpkg'yi hataya dusuruyor.
     debconf-set-selections <<'EOF'
 grub-pc grub-pc/install_devices multiselect
 grub-pc grub-pc/install_devices_empty boolean true
 EOF
-    $APT install grub-pc
-    log "Kurulu GRUB paketleri:"
-    dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' 'grub*' 2>/dev/null \
-        | grep '^ii' || true
 fi
+log "Kurulu GRUB paketleri:"
+dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' 'grub*' 'shim*' 2>/dev/null \
+    | grep '^ii' || true
 
 log "Kurulan surumler:"
 dpkg-query -W -f='${Package} ${Version}\n' proxmox-ve pve-manager proxmox-default-kernel ifupdown2 || true
